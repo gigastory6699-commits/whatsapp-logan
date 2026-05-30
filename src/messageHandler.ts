@@ -8,7 +8,7 @@ import { checkForSpam, handleSpamMessage, isSpamDetectionEnabled } from './spamD
 import { isJoinRequestProcessingEnabled } from './joinRequestProcessor';
 import { handleMention, handleVoiceMention, isMentionResponseEnabled, logMentionResponseConfig } from './features/mention-response';
 import { transcribeAudio, isVoiceTranscriptionEnabled, formatVoiceTranscription } from './services/whisper';
-import { isAuthorizedForVoice, containsLoganTrigger, removeLoganTrigger, isFreeChatGroup, containsLoganTextTrigger, removeLoganFromText, isTextTriggerAllowed } from './utils/agent-triggers';
+import { isAuthorizedForVoice, containsLoganTrigger, removeLoganTrigger, isFreeChatGroup, containsLoganTextTrigger, removeLoganFromText, isTextTriggerAllowed, isAuthorizedAdmin } from './utils/agent-triggers';
 import { hasImage, downloadImage, cleanupImage, DownloadedImage } from './utils/image-downloader';
 
 type WAMessage = proto.IWebMessageInfo;
@@ -574,26 +574,43 @@ export function setupMessageHandler(sock: WASocket): void {
           continue;
         }
 
-        // Check for self chat command (Note to Self / DM with ourselves)
+        // Check for self chat command (Note to Self / DM with ourselves) or Admin DM command
         const bodyText = getMessageBody(message);
         const hasCommandPrefix = bodyText && bodyText.trim().startsWith('/');
         
-        const botJid = getBotJid();
-        const botLid = getBotLid();
-        const envPhone = process.env.BOT_PHONE_NUMBER;
-        const cleanId = chatId.split('@')[0].split(':')[0];
-        
-        let isSelf = false;
-        if (botJid && botJid.split('@')[0].split(':')[0] === cleanId) isSelf = true;
-        else if (botLid && botLid.split('@')[0].split(':')[0] === cleanId) isSelf = true;
-        else if (envPhone && envPhone.replace(/\D/g, '') === cleanId.replace(/\D/g, '')) isSelf = true;
-        
-        // If it's a command sent by the owner to themselves in the self-chat
-        const isOwnSelfCommand = message.key.fromMe && hasCommandPrefix && isSelf;
+        let isAdminCommand = false;
+        if (hasCommandPrefix) {
+          const botJid = getBotJid();
+          const botLid = getBotLid();
+          const envPhone = process.env.BOT_PHONE_NUMBER;
+          const cleanId = chatId.split('@')[0].split(':')[0];
+          
+          // Case A: From the bot owner to themselves (Self-Chat)
+          let isSelf = false;
+          if (botJid && botJid.split('@')[0].split(':')[0] === cleanId) isSelf = true;
+          else if (botLid && botLid.split('@')[0].split(':')[0] === cleanId) isSelf = true;
+          else if (envPhone && envPhone.replace(/\D/g, '') === cleanId.replace(/\D/g, '')) isSelf = true;
+          
+          const isOwnSelfCommand = message.key.fromMe && isSelf;
+          
+          // Case B: Sent in DM to the bot by another phone number that is an admin
+          const isDM = chatId.endsWith('@s.whatsapp.net') || chatId.endsWith('@lid');
+          let isAdminSender = false;
+          if (!message.key.fromMe && isDM) {
+            const keyAny = message.key as any;
+            let senderNum = keyAny.senderPn ? keyAny.senderPn.split('@')[0] : chatId.split('@')[0];
+            senderNum = senderNum.replace(/[^0-9]/g, '');
+            isAdminSender = isAuthorizedAdmin(senderNum);
+          }
+          
+          if (isOwnSelfCommand || isAdminSender) {
+            isAdminCommand = true;
+          }
+        }
 
-        if (isOwnSelfCommand) {
+        if (isAdminCommand) {
           const cmd = bodyText!.trim().split(' ')[0].toLowerCase();
-          console.log(`[SELF-COMMAND] Handling command ${cmd} in self chat`);
+          console.log(`[ADMIN-COMMAND] Handling command ${cmd} from admin/self in chat ${chatId}`);
           
           if (cmd === '/stop') {
             await setBotPaused(true);
