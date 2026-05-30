@@ -1,5 +1,7 @@
+import { UniversalEdgeTTS } from 'edge-tts-universal';
+
 /**
- * ElevenLabs Text-to-Speech Service
+ * ElevenLabs & Microsoft Edge Neural Text-to-Speech Service
  * Converts text to natural-sounding speech for voice summaries
  */
 
@@ -47,70 +49,163 @@ function trimToCompleteSentence(text: string): string {
 }
 
 /**
- * Convert text to speech using ElevenLabs API
- * @param text The text to convert to speech
- * @returns Audio buffer (mp3 format) or null on failure
+ * Convert text to speech using Microsoft Azure Neural TTS API
  */
-export async function textToSpeech(text: string): Promise<Buffer | null> {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  const voiceId = process.env.ELEVENLABS_VOICE_ID || DEFAULT_VOICE_ID;
+async function azureTextToSpeech(text: string): Promise<Buffer | null> {
+  const apiKey = process.env.AZURE_SPEECH_KEY;
+  const region = process.env.AZURE_SPEECH_REGION || 'eastus';
 
   if (!apiKey) {
-    console.error('[ELEVENLABS] ELEVENLABS_API_KEY not configured');
+    console.error('[AZURE-TTS] AZURE_SPEECH_KEY not configured');
     return null;
   }
 
-  if (!text || text.trim().length === 0) {
-    console.error('[ELEVENLABS] Empty text provided');
-    return null;
-  }
+  // Detect language to use appropriate neural voice
+  // If text contains Arabic characters, use Salma (Egypt), otherwise Jenny (US)
+  const isArabic = /[\u0600-\u06FF]/.test(text);
+  const voiceName = isArabic ? 'ar-EG-SalmaNeural' : 'en-US-JennyNeural';
+  const langCode = isArabic ? 'ar-EG' : 'en-US';
 
-  // Safety net: trim to last complete sentence
-  const safeText = trimToCompleteSentence(text);
+  console.log(`[AZURE-TTS] Converting ${text.length} characters to speech (lang: ${langCode}, voice: ${voiceName})...`);
 
-  const url = `${ELEVENLABS_API_URL}/${voiceId}`;
+  const url = `https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`;
 
-  const requestBody: ElevenLabsRequest = {
-    text: safeText,
-    model_id: 'eleven_v3',
-    voice_settings: {
-      stability: 0.5,
-      similarity_boost: 0.75
-    }
-  };
+  // Safely escape XML characters in text
+  const escapedText = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+
+  const ssml = `<speak version='1.0' xml:lang='${langCode}'>
+    <voice xml:lang='${langCode}' xml:gender='Female' name='${voiceName}'>
+      ${escapedText}
+    </voice>
+  </speak>`;
 
   try {
-    console.log(`[ELEVENLABS] Converting ${safeText.length} characters to speech...`);
-
     const response = await fetch(url, {
       method: 'POST',
       headers: {
-        'xi-api-key': apiKey,
-        'Content-Type': 'application/json'
+        'Ocp-Apim-Subscription-Key': apiKey,
+        'Content-Type': 'application/ssml+xml',
+        'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3',
+        'User-Agent': 'MedoBot'
       },
-      body: JSON.stringify(requestBody)
+      body: ssml
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[ELEVENLABS] API error ${response.status}: ${errorText}`);
+      console.error(`[AZURE-TTS] API error ${response.status}: ${errorText}`);
       return null;
     }
 
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    console.log(`[ELEVENLABS] Generated ${buffer.length} bytes of audio`);
+    console.log(`[AZURE-TTS] Generated ${buffer.length} bytes of audio`);
     return buffer;
   } catch (error) {
-    console.error('[ELEVENLABS] TTS request failed:', error);
+    console.error('[AZURE-TTS] Request failed:', error);
     return null;
   }
 }
 
 /**
- * Check if ElevenLabs TTS is enabled (requires API key)
+ * Convert text to speech using Microsoft Edge Neural TTS API (100% Free, Unlimited, no API key needed!)
+ */
+async function edgeTextToSpeech(text: string): Promise<Buffer | null> {
+  try {
+    // Detect language: use Salma (Arabic) or Jenny (English)
+    const isArabic = /[\u0600-\u06FF]/.test(text);
+    const voiceName = isArabic ? 'ar-EG-SalmaNeural' : 'en-US-JennyNeural';
+
+    console.log(`[EDGE-TTS] Converting ${text.length} characters to speech (voice: ${voiceName})...`);
+
+    const tts = new UniversalEdgeTTS(text, voiceName);
+    const result = await tts.synthesize();
+    const arrayBuffer = await result.audio.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    console.log(`[EDGE-TTS] Generated ${buffer.length} bytes of audio`);
+    return buffer;
+  } catch (error) {
+    console.error('[EDGE-TTS] Request failed:', error);
+    return null;
+  }
+}
+
+/**
+ * Convert text to speech using ElevenLabs, Azure, or Edge TTS API
+ * @param text The text to convert to speech
+ * @returns Audio buffer (mp3 format) or null on failure
+ */
+export async function textToSpeech(text: string): Promise<Buffer | null> {
+  if (process.env.AZURE_SPEECH_KEY) {
+    return azureTextToSpeech(text);
+  }
+
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (apiKey) {
+    const voiceId = process.env.ELEVENLABS_VOICE_ID || DEFAULT_VOICE_ID;
+
+    if (!text || text.trim().length === 0) {
+      console.error('[ELEVENLABS] Empty text provided');
+      return null;
+    }
+
+    // Safety net: trim to last complete sentence
+    const safeText = trimToCompleteSentence(text);
+
+    const url = `${ELEVENLABS_API_URL}/${voiceId}`;
+
+    const requestBody: ElevenLabsRequest = {
+      text: safeText,
+      model_id: 'eleven_v3',
+      voice_settings: {
+        stability: 0.5,
+        similarity_boost: 0.75
+      }
+    };
+
+    try {
+      console.log(`[ELEVENLABS] Converting ${safeText.length} characters to speech...`);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'xi-api-key': apiKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[ELEVENLABS] API error ${response.status}: ${errorText}`);
+        return null;
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      console.log(`[ELEVENLABS] Generated ${buffer.length} bytes of audio`);
+      return buffer;
+    } catch (error) {
+      console.error('[ELEVENLABS] TTS request failed:', error);
+      return null;
+    }
+  }
+
+  // If neither Azure nor ElevenLabs is configured, use 100% free and unlimited Microsoft Edge TTS!
+  return edgeTextToSpeech(text);
+}
+
+/**
+ * Check if TTS is enabled (Always true because Edge TTS provides a 100% free fallback!)
  */
 export function isElevenLabsEnabled(): boolean {
-  return !!process.env.ELEVENLABS_API_KEY;
+  return true;
 }

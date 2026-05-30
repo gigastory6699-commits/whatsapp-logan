@@ -1,0 +1,12 @@
+node_modules
+dist
+.env
+auth_info
+.git
+.github
+.gemini
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+.DS_Store
+*.md

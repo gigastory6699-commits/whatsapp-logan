@@ -68,9 +68,16 @@ const LOGAN_VOICE_TRIGGERS = [
   /^לוגן/i,           // Hebrew: starts with לוגן
   /^לוגאן/i,          // Hebrew: starts with לוגאן (with א)
   /^logan/i,          // English: starts with Logan
+  /^لوجان/i,          // Arabic: starts with لوجان
+  /^لوغان/i,          // Arabic: starts with لوغان
+  /^لوقن/i,           // Arabic: starts with لوقن
   /היי\s*לוג[אֹ]?ן/i,  // Hebrew: "היי לוגן/לוגאן" (hey Logan)
   /הי\s*לוג[אֹ]?ן/i,   // Hebrew: "הי לוגן/לוגאן" (hi Logan)
   /שלום\s*לוג[אֹ]?ן/i, // Hebrew: "שלום לוגן/לוגאן" (hello Logan)
+  /^medo/i,           // English Medo trigger
+  /^ميدو/i,           // Arabic Medo trigger
+  /يا\s*ميدو/i,        // Arabic: starts with "يا ميدو"
+  /هلو\s*ميدو/i,       // Arabic: starts with "هلو ميدو"
 ];
 
 /**
@@ -161,13 +168,32 @@ const VIDEO_TRIGGERS = [
   /gradient\s*text/i,
 ];
 
+/**
+ * Patterns that trigger image generation via Pollinations/Flux
+ */
+export const IMAGE_TRIGGERS = [
+  /^(ת)?צייר\s+(לי\s+)?(תמונה\s+ש)?/i,
+  /^(ת)?צור\s+(לי\s+)?תמונה\s*(של)?/i,
+  /^(ת)?עשה\s+(לי\s+)?תמונה\s*(של)?/i,
+  /^(ת)?עצב\s+(לי\s+)?תמונה\s*(של)?/i,
+  /^תמונה\s+של/i,
+  /^(ت|ار|ص)\s*سم\s*(لي\s*)?صورة\s*(ل)?/i,
+  /^صورة\s*ل/i,
+  /generate\s+(an\s+)?image\s*(of)?/i,
+  /create\s+(an\s+)?image\s*(of)?/i,
+  /draw\s+(a\s+)?picture\s*(of)?/i,
+  /make\s+(an\s+)?image\s*(of)?/i,
+  /paint\s+(a\s+)?picture\s*(of)?/i,
+];
+
 export interface TriggerResult {
   shouldUseAgent: boolean;
   isVideoRequest: boolean;
   isLandingPageRequest: boolean;
+  isImageRequest?: boolean;
   isDirectCommand: boolean;
   extractedCommand?: string;
-  triggerType: 'video' | 'landing_page' | 'agent' | 'direct' | 'groq';
+  triggerType: 'video' | 'landing_page' | 'agent' | 'direct' | 'groq' | 'image';
 }
 
 /**
@@ -213,6 +239,7 @@ export function shouldRouteToAgent(
       shouldUseAgent: false,
       isVideoRequest: false,
       isLandingPageRequest: false,
+      isImageRequest: false,
       isDirectCommand: false,
       triggerType: 'groq'
     };
@@ -226,6 +253,7 @@ export function shouldRouteToAgent(
         shouldUseAgent: true,
         isVideoRequest: false,
         isLandingPageRequest: false,
+        isImageRequest: false,
         isDirectCommand: true,
         extractedCommand: command,
         triggerType: 'direct'
@@ -240,6 +268,7 @@ export function shouldRouteToAgent(
       shouldUseAgent: true,
       isVideoRequest: false,
       isLandingPageRequest: false,
+      isImageRequest: false,
       isDirectCommand: false,
       extractedCommand: prompt || trimmedMessage,
       triggerType: 'agent'
@@ -254,6 +283,7 @@ export function shouldRouteToAgent(
         shouldUseAgent: true,
         isVideoRequest: false,
         isLandingPageRequest: true,
+        isImageRequest: false,
         isDirectCommand: false,
         triggerType: 'landing_page'
       };
@@ -267,8 +297,23 @@ export function shouldRouteToAgent(
         shouldUseAgent: true,
         isVideoRequest: true,
         isLandingPageRequest: false,
+        isImageRequest: false,
         isDirectCommand: false,
         triggerType: 'video'
+      };
+    }
+  }
+
+  // 4.5 Check for image generation triggers (auto-detected)
+  for (const pattern of IMAGE_TRIGGERS) {
+    if (pattern.test(trimmedMessage)) {
+      return {
+        shouldUseAgent: true,
+        isVideoRequest: false,
+        isLandingPageRequest: false,
+        isImageRequest: true,
+        isDirectCommand: false,
+        triggerType: 'image'
       };
     }
   }
@@ -278,6 +323,7 @@ export function shouldRouteToAgent(
     shouldUseAgent: false,
     isVideoRequest: false,
     isLandingPageRequest: false,
+    isImageRequest: false,
     isDirectCommand: false,
     triggerType: 'groq'
   };
@@ -460,6 +506,28 @@ export function extractVideoDescription(message: string): string {
 }
 
 /**
+ * Extract image description from user message
+ */
+export function extractImageDescription(message: string): string {
+  let description = message
+    .replace(/^(ת)?צייר\s+(لي\s+)?(תמונה\s+ש)?/gi, '')
+    .replace(/^(ת)?צור\s+(لي\s+)?תמונה\s*(של)?/gi, '')
+    .replace(/^(ת)?עשה\s+(لي\s+)?תמונה\s*(של)?/gi, '')
+    .replace(/^(ת)?עצב\s+(لي\s+)?תמונה\s*(של)?/gi, '')
+    .replace(/^תמונה\s+של/gi, '')
+    .replace(/^(ت|ار|ص)\s*سم\s*(لي\s*)?صورة\s*(ل)?/gi, '')
+    .replace(/^صورة\s*ل/gi, '')
+    .replace(/generate\s+(an\s+)?image\s*(of)?/gi, '')
+    .replace(/create\s+(an\s+)?image\s*(of)?/gi, '')
+    .replace(/draw\s+(a\s+)?picture\s*(of)?/gi, '')
+    .replace(/make\s+(an\s+)?image\s*(of)?/gi, '')
+    .replace(/paint\s+(a\s+)?picture\s*(of)?/gi, '')
+    .trim();
+
+  return description || 'a beautiful painting';
+}
+
+/**
  * Check if a user is authorized for voice processing in a group
  * This allows voice messages to be processed even without @mention
  *
@@ -509,11 +577,21 @@ export function removeLoganTrigger(transcription: string): string {
   cleaned = cleaned.replace(/^הי\s*לוג[אֹ]?ן[,\s]*/i, '');
   cleaned = cleaned.replace(/^שלום\s*לוג[אֹ]?ן[,\s]*/i, '');
 
+  // Remove Arabic triggers
+  cleaned = cleaned.replace(/^لوجان[,\s]*/gi, '');
+  cleaned = cleaned.replace(/^لوغان[,\s]*/gi, '');
+  cleaned = cleaned.replace(/^لوقن[,\s]*/gi, '');
+  cleaned = cleaned.replace(/^ميدو[,\s]*/gi, '');
+
   // Remove English triggers
   cleaned = cleaned.replace(/^logan[,\s]*/i, '');
   cleaned = cleaned.replace(/^hey\s*logan[,\s]*/i, '');
   cleaned = cleaned.replace(/^hi\s*logan[,\s]*/i, '');
   cleaned = cleaned.replace(/^hello\s*logan[,\s]*/i, '');
+  cleaned = cleaned.replace(/^medo[,\s]*/i, '');
+  cleaned = cleaned.replace(/^hey\s*medo[,\s]*/i, '');
+  cleaned = cleaned.replace(/^hi\s*medo[,\s]*/i, '');
+  cleaned = cleaned.replace(/^hello\s*medo[,\s]*/i, '');
 
   return cleaned.trim();
 }
@@ -533,13 +611,20 @@ export function isFreeChatGroup(groupId: string): boolean {
  */
 export function containsLoganTextTrigger(message: string): boolean {
   const lowerMessage = message.toLowerCase();
-  // Check for "logan", "לוגן", or "לוגאן" anywhere in the message
-  return lowerMessage.includes('logan') || message.includes('לוגן') || message.includes('לוגאן');
+  // Check for "logan", "לוגן", "לוגאן", "medo" or Arabic لوجان/لوغان/لوقن/ميدو anywhere in the message
+  return lowerMessage.includes('logan') || 
+         lowerMessage.includes('medo') ||
+         message.includes('لוגן') || 
+         message.includes('לוגאן') ||
+         message.includes('لوجان') ||
+         message.includes('لوغان') ||
+         message.includes('لوقن') ||
+         message.includes('ميدو');
 }
 
 /**
  * Remove Logan name from text message to get the actual query
- * e.g., "logan מה אתה חושב?" → "מה אתה חושב?"
+ * e.g., "logan מה אתה חושב?" → "מה אתה חושب?"
  */
 export function removeLoganFromText(message: string): string {
   let cleaned = message.trim();
@@ -548,8 +633,15 @@ export function removeLoganFromText(message: string): string {
   cleaned = cleaned.replace(/לוגאן[,\s]*/gi, '');
   cleaned = cleaned.replace(/לוגן[,\s]*/gi, '');
 
+  // Remove Arabic variations (لوجان, لوغان, لوقن, ميدو)
+  cleaned = cleaned.replace(/لوجان[,\s]*/gi, '');
+  cleaned = cleaned.replace(/لوغان[,\s]*/gi, '');
+  cleaned = cleaned.replace(/لوقن[,\s]*/gi, '');
+  cleaned = cleaned.replace(/ميدو[,\s]*/gi, '');
+
   // Remove English variations (case insensitive)
   cleaned = cleaned.replace(/logan[,\s]*/gi, '');
+  cleaned = cleaned.replace(/medo[,\s]*/gi, '');
 
   return cleaned.trim();
 }

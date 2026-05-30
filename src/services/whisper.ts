@@ -42,7 +42,7 @@ export async function transcribeAudio(audioBuffer: Buffer): Promise<Transcriptio
     const blob = new Blob([audioBuffer], { type: 'audio/ogg' });
     formData.append('file', blob, 'audio.ogg');
     formData.append('model', WHISPER_MODEL);
-    formData.append('language', 'he'); // Hebrew default, Whisper will auto-detect if needed
+    // Let Whisper auto-detect language (Arabic, English, Hebrew)
     formData.append('response_format', 'json');
 
     console.log(`[WHISPER] Transcribing audio (${audioBuffer.length} bytes)...`);

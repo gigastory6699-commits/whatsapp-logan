@@ -625,6 +625,42 @@ export function setupMessageHandler(sock: WASocket): void {
         // Skip protocol messages (read receipts, etc.)
         if (processedMessage.message_type === 'protocol') continue;
 
+        // Handle /help command
+        if (processedMessage.body && processedMessage.body.trim().toLowerCase() === '/help') {
+          console.log(`[COMMAND] /help requested by ${processedMessage.sender_name} in ${processedMessage.chat_name}`);
+          
+          const helpText = `*🤖 قائمة المساعدة / Help Menu 🤖*
+
+*العربية 🇸🇦:*
+أهلاً بك! أنا **لوجان (Logan)**، مساعدك الذكي. إليك قائمة بأبرز الأوامر والميزات المتاحة:
+• الدردشة المباشرة معي في الخاص أو في المجموعات (عند الإشارة إليّ باسمي "لوجان").
+• تفريغ وفهم الرسائل الصوتية تلقائياً والرد عليها.
+• البحث في الويب عن أحدث معلومات وأخبار الذكاء الاصطناعي.
+
+*English 🇬🇧:*
+Welcome! I am **Logan**, your AI Assistant. Here is a list of commands and features available:
+• Chat with me directly in DMs or in groups (by mentioning "Logan").
+• Auto-transcribe and understand voice messages, and reply to them.
+• Live web search for the latest AI news and technical information.
+
+_للمزيد من الاستفسارات، تواصل معي في أي وقت!_
+_For more inquiries, feel free to chat with me anytime!_`;
+
+          // React with ℹ️
+          try {
+            await sock.sendMessage(chatId, { react: { text: 'ℹ️', key: message.key } });
+          } catch (e) {}
+
+          // Send response
+          let recipientJid = chatId;
+          if (chatId.endsWith('@lid') && processedMessage.sender_number) {
+            recipientJid = `${processedMessage.sender_number}@s.whatsapp.net`;
+          }
+          
+          await sock.sendMessage(recipientJid, { text: helpText });
+          continue; // Stop processing further for /help command
+        }
+
         // Spam detection (only for groups, not channels - only admins can post in channels)
         if (isGroup && !isChannel && processedMessage.body) {
           const spamCheck = await checkForSpam(processedMessage.body, chatId);

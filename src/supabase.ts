@@ -3,12 +3,13 @@ import { WhatsAppMessage } from './types';
 
 let supabase: SupabaseClient | null = null;
 
-export function initSupabase(): SupabaseClient {
+export function initSupabase(): SupabaseClient | null {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_KEY;
 
   if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Missing SUPABASE_URL or SUPABASE_KEY environment variables');
+    console.warn(`[${new Date().toISOString()}] ⚠️ SUPABASE_URL or SUPABASE_KEY is missing. Running in local/offline mode (messages will be logged to terminal, but not saved to DB).`);
+    return null;
   }
 
   supabase = createClient(supabaseUrl, supabaseKey);

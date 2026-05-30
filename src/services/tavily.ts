@@ -79,6 +79,22 @@ const FRESH_DATA_PATTERNS = [
   /תגלה/i,
   /גלה/i,
 
+  // Explicit search/browse commands (Arabic)
+  /ابحث/i,
+  /دور على/i,
+  /دور لي/i,
+  /تصفح/i,
+  /جوجل/i,
+  /أحدث/i,
+  /احدث/i,
+  /جديد/i,
+  /اخبار/i,
+  /أخبار/i,
+  /رابط/i,
+  /روابط/i,
+  /قناة/i,
+  /قناه/i,
+
   // Explicit search/browse commands (English)
   /browse/i,
   /search for/i,
@@ -198,6 +214,10 @@ function extractSearchQuery(message: string): string {
   let query = message
     .replace(/@\d+/g, '') // Remove @mentions
     .replace(/לוגאן/gi, '')
+    .replace(/לוגן/gi, '')
+    .replace(/لوجان/gi, '')
+    .replace(/لوغان/gi, '')
+    .replace(/لوقن/gi, '')
     .replace(/logan/gi, '')
     .trim();
 
@@ -371,6 +391,25 @@ async function saveTavilySearchLegacy(
 }
 
 /**
+ * Check if a search query is asking for fresh news or current events
+ */
+function isNewsQuery(query: string): boolean {
+  const newsPatterns = [
+    /חדשות/i,
+    /מלחמה/i,
+    /דיווח/i,
+    /news/i,
+    /اخبار/i,
+    /أخبار/i,
+    /حدث/i,
+    /احداث/i,
+    /أحداث/i,
+    /عاجل/i
+  ];
+  return newsPatterns.some(pattern => pattern.test(query));
+}
+
+/**
  * Search Tavily for real-time web results (with caching)
  */
 export async function searchTavily(
@@ -383,7 +422,7 @@ export async function searchTavily(
   results: TavilySearchResult[];
   fromCache?: boolean;
   error?: string;
-}> {
+ }> {
   const searchQuery = extractSearchQuery(userQuery);
 
   console.log(`[TAVILY] Searching for: "${searchQuery}"`);
@@ -414,20 +453,29 @@ export async function searchTavily(
   console.log(`[TAVILY] Cache MISS, calling Tavily API...`);
 
   try {
+    const isNews = isNewsQuery(searchQuery);
+    const topic = isNews ? 'news' : 'general';
+    console.log(`[TAVILY] Dynamic topic selection: "${topic}" (isNewsQuery=${isNews})`);
+
+    const requestBody: any = {
+      query: searchQuery,
+      search_depth: 'basic',
+      max_results: 5,
+      include_answer: 'basic',
+      topic: topic
+    };
+
+    if (isNews) {
+      requestBody.time_range = 'week';
+    }
+
     const response = await fetch(TAVILY_API_URL, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${TAVILY_API_KEY}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        query: searchQuery,
-        search_depth: 'basic',
-        max_results: 5,
-        include_answer: 'basic',
-        topic: 'news',
-        time_range: 'week'
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {
@@ -489,12 +537,12 @@ export function formatTavilyResultsForPrompt(
   formatted += '=== END WEB SEARCH RESULTS ===\n';
   formatted += 'CRITICAL INSTRUCTIONS FOR WEB SEARCH:\n';
   formatted += '1. Use ONLY the information from the web search results above - DO NOT make up any facts!\n';
-  formatted += '2. If the search results are NOT RELEVANT to the question, say "לא מצאתי מידע עדכני על זה" and DO NOT add any source link!\n';
+  formatted += '2. If the search results are NOT RELEVANT to the question, say you didn\'t find up-to-date information on this in the user\'s language (e.g. "لم أجد معلومات محدثة حول هذا الموضوع" in Arabic, "לא מצאתי מידע עדכני על זה" in Hebrew, or "I couldn\'t find up-to-date information on this" in English) and DO NOT add any source link!\n';
   formatted += '3. ONLY if you found relevant info AND used it in your answer - add the source URL at the end!\n';
-  formatted += '4. Format (only when you HAVE relevant info): After your answer, add "🔗 מקור: [URL]"\n';
+  formatted += '4. Format (only when you HAVE relevant info): After your answer, add "🔗 المصدر: [URL]" or "🔗 Source: [URL]" or "🔗 מקור: [URL]" depending on the language of the conversation!\n';
   formatted += '5. Pick the most relevant source URL from the results above - ONLY use URLs from the search results!\n';
   formatted += '6. If the search results don\'t answer the question - DO NOT add a source link! Just say you didn\'t find info.\n';
-  formatted += '7. NEVER invent URLs! If you say "לא מצאתי" - NO URL should appear in your response!';
+  formatted += '7. NEVER invent URLs! If you say you didn\'t find info (e.g. "لم أجد", "לא מצאתי", "didn\'t find") - NO URL should appear in your response!';
 
   return formatted;
 }
@@ -529,6 +577,13 @@ function responseIndicatesNoInfo(response: string): boolean {
     /could not find/i,
     /no information/i,
     /no relevant/i,
+    /لم أجد/i,
+    /لا يوجد معلومات/i,
+    /لا توجد معلومات/i,
+    /لا أعرف/i,
+    /لم أتمكن من إيجاد/i,
+    /ليس لدي معلومات/i,
+    /لم أجد نتائج/i,
   ];
   return noInfoPatterns.some(pattern => pattern.test(response));
 }
