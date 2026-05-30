@@ -1,7 +1,7 @@
 import { WASocket, proto, downloadMediaMessage } from '@whiskeysockets/baileys';
 import { WhatsAppMessage } from './types';
 import { ALLOWED_GROUP_IDS, ALLOWED_GROUPS, CONTENT_MESSAGE_TYPES } from './config';
-import { saveMessage, getConversationHistory } from './supabase';
+import { saveMessage, getConversationHistory, isBotPaused, setBotPaused, clearConversationHistory } from './supabase';
 import { isBotMentioned, isReplyToBot, sendMentionWebhook, logMentionWebhookConfig } from './mentionWebhook';
 import { getBotJid, getBotLid } from './connection';
 import { checkForSpam, handleSpamMessage, isSpamDetectionEnabled } from './spamDetector';
@@ -574,9 +574,117 @@ export function setupMessageHandler(sock: WASocket): void {
           continue;
         }
 
+        // Check for self chat command (Note to Self / DM with ourselves)
+        const bodyText = getMessageBody(message);
+        const hasCommandPrefix = bodyText && bodyText.trim().startsWith('/');
+        
+        const botJid = getBotJid();
+        const botLid = getBotLid();
+        const envPhone = process.env.BOT_PHONE_NUMBER;
+        const cleanId = chatId.split('@')[0].split(':')[0];
+        
+        let isSelf = false;
+        if (botJid && botJid.split('@')[0].split(':')[0] === cleanId) isSelf = true;
+        else if (botLid && botLid.split('@')[0].split(':')[0] === cleanId) isSelf = true;
+        else if (envPhone && envPhone.replace(/\D/g, '') === cleanId.replace(/\D/g, '')) isSelf = true;
+        
+        // If it's a command sent by the owner to themselves in the self-chat
+        const isOwnSelfCommand = message.key.fromMe && hasCommandPrefix && isSelf;
+
+        if (isOwnSelfCommand) {
+          const cmd = bodyText!.trim().split(' ')[0].toLowerCase();
+          console.log(`[SELF-COMMAND] Handling command ${cmd} in self chat`);
+          
+          if (cmd === '/stop') {
+            await setBotPaused(true);
+            try {
+              await sock.sendMessage(chatId, { react: { text: '⏸️', key: message.key } });
+            } catch (e) {}
+            await sock.sendMessage(chatId, { 
+              text: `*⏸️ تم إيقاف البوت مؤقتاً (Paused)*\n\nلن يستجيب البوت للرسائل الصوتية، البحث، أو الإشارات من الآن.\nلتفعيل البوت مرة أخرى، أرسل:\n👉 */start*`
+            });
+            continue;
+          } 
+          
+          if (cmd === '/start') {
+            await setBotPaused(false);
+            try {
+              await sock.sendMessage(chatId, { react: { text: '▶️', key: message.key } });
+            } catch (e) {}
+            await sock.sendMessage(chatId, { 
+              text: `*▶️ تم تفعيل وتشغيل البوت بنجاح (Resumed)*\n\nالبوت نشط الآن وجاهز للاستجابة لجميع الطلبات والميزات!\nلمعرفة القدرات المتاحة أرسل:\n👉 */skills*`
+            });
+            continue;
+          }
+          
+          if (cmd === '/new') {
+            const success = await clearConversationHistory(chatId);
+            try {
+              await sock.sendMessage(chatId, { react: { text: '🔄', key: message.key } });
+            } catch (e) {}
+            await sock.sendMessage(chatId, { 
+              text: success 
+                ? `*🔄 تم بدء جلسة جديدة بنجاح!*\n\nتم مسح ذاكرة المحادثة السابقة لهذا الشات بالكامل. سيبدأ الذكاء الاصطناعي كالمعتاد بدون تذكر الرسائل السابقة.`
+                : `*⚠️ فشل في بدء جلسة جديدة!*\n\nحدث خطأ أثناء محاولة مسح الذاكرة من قاعدة البيانات.`
+            });
+            continue;
+          }
+          
+          if (cmd === '/skills') {
+            try {
+              await sock.sendMessage(chatId, { react: { text: '🚀', key: message.key } });
+            } catch (e) {}
+            
+            const skillsText = `*🚀 قدرات وميزات البوت الذكي (Logan Skills) 🚀*
+
+إليك جميع المهارات والخدمات المتاحة والنشطة في البوت الآن:
+
+1. 🧠 *المحادثة والذكاء الاصطناعي (AI Chat & Groq):*
+   الرد الذكي والسريع على أي رسالة يتم الإشارة للبوت فيها (لوجان أو Logan) باستخدام أفضل النماذج اللغوية.
+
+2. 🎨 *نظام توليد الصور الاحترافي (Flux AI Image Gen):*
+   توليد صور فائقة الجودة وخالية من العلامات المائية باستخدام نموذج *Flux* الشهير عبر pollination.ai.
+   💡 *أمر التفعيل:* "صمم صورة لـ..."، "ارسم لقطة..."، "صورة لـ...".
+
+3. 🎙️ *تفريغ والرد على الرسائل الصوتية (Voice Transcription & Whisper):*
+   تحويل أي رسالة صوتية إلى نص مكتوب تلقائياً وتفهمها عبر *Groq Whisper* والرد عليها ذكياً بصوت مسموع أو كتابياً.
+
+4. 🔍 *البحث الذكي في الويب (Tavily Web Search):*
+   القدرة على تصفح الإنترنت الفوري لجلب معلومات حية ودقيقة لأحدث الأخبار والتقنيات التقنية.
+
+5. 📊 *الملخصات اليومية للمجموعات (Daily Summaries & Claude):*
+   توليد ملخصات يومية ذكية وشاملة ومكتوبة ومنطوقة للمجموعات في نهاية كل يوم باستخدام *Claude*.
+
+6. 🔒 *قفل المجموعات في السبت (Shabbat Auto-Locker):*
+   حماية المجموعات وقفلها تلقائياً قبل دخول السبت وفتحها بعد خروجه مع توجيه تنبيهات جميلة.
+
+7. 🛡️ *كشف وحظر الرسائل السبام (AI Spam Guard):*
+   تصفية المجموعات وحذف رسائل الـ Spam تلقائياً وحظر مرسليها بعد الإنذار الأول لحماية الأعضاء.
+
+8. 👥 *القبول التلقائي لطلبات الانضمام (Auto Join Request):*
+   التحقق التلقائي من الأشخاص الحقيقيين وقبولهم فوراً ورفض البوتات تلقائياً بناءً على معايير ذكية.
+
+9. ⚙️ *التحكم الذاتي للبوت (Self Control):*
+   • */stop* - إيقاف البوت مؤقتاً.
+   • */start* - تفعيل البوت وتشغيله.
+   • */new* - بدء محادثة جديدة ومسح الذاكرة لهذا الشات.
+   • */skills* - عرض قائمة المهارات هذه.`;
+
+            await sock.sendMessage(chatId, { text: skillsText });
+            continue;
+          }
+        }
+
         // Skip messages from the bot itself
         if (message.key.fromMe) {
           console.log(`[${new Date().toISOString()}] [DEBUG] Skipping: fromMe=true`);
+          continue;
+        }
+
+        // Check if the bot is paused globally
+        const paused = await isBotPaused();
+        if (paused) {
+          console.log(`[PAUSED] Bot is paused. Skipping message from ${chatId}`);
           continue;
         }
 

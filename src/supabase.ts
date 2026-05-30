@@ -341,3 +341,71 @@ export async function getMessagesWithLikes(
     return [];
   }
 }
+
+let isBotPausedLocal = false;
+
+/**
+ * Check if the bot is currently paused
+ */
+export async function isBotPaused(): Promise<boolean> {
+  if (!supabase) return isBotPausedLocal;
+  
+  try {
+    const { data, error } = await supabase
+      .from('whatsapp_auth_state')
+      .select('value')
+      .eq('key', 'bot_paused')
+      .single();
+      
+    if (error || !data) return isBotPausedLocal;
+    return JSON.parse(data.value) === true;
+  } catch (err) {
+    return isBotPausedLocal;
+  }
+}
+
+/**
+ * Set the bot paused state
+ */
+export async function setBotPaused(paused: boolean): Promise<void> {
+  isBotPausedLocal = paused;
+  if (!supabase) return;
+  
+  try {
+    await supabase
+      .from('whatsapp_auth_state')
+      .upsert({
+        key: 'bot_paused',
+        value: JSON.stringify(paused),
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'key' });
+  } catch (err) {
+    console.error('[Supabase] Error setting bot paused state:', err);
+  }
+}
+
+/**
+ * Clear conversation history for a specific chat by marking previous messages as is_content = false
+ */
+export async function clearConversationHistory(chatId: string): Promise<boolean> {
+  if (!supabase) return false;
+  
+  try {
+    const { error } = await supabase
+      .from('whatsapp_messages')
+      .update({ is_content: false })
+      .eq('chat_id', chatId);
+      
+    if (error) {
+      console.error(`[Supabase] Error clearing history for ${chatId}:`, error.message);
+      return false;
+    }
+    
+    console.log(`[Supabase] Cleared conversation history for chat: ${chatId}`);
+    return true;
+  } catch (err) {
+    console.error(`[Supabase] Exception clearing history for ${chatId}:`, err);
+    return false;
+  }
+}
+
