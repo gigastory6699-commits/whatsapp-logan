@@ -11,6 +11,7 @@ import * as qrcode from 'qrcode-terminal';
 import { AUTH_FOLDER, MAX_RECONNECT_ATTEMPTS } from './config';
 import { checkIfCurrentlyShabbat } from './shabbatLocker';
 import { useSupabaseAuthState, isSupabaseAuthAvailable } from './services/supabase-auth-state';
+import { setLatestQrCode, clearLatestQrCode } from './api';
 
 let sock: WASocket | null = null;
 let reconnectAttempts = 0;
@@ -167,6 +168,8 @@ export async function connectToWhatsApp(onConnected: MessageHandler): Promise<vo
       console.log(`\n[${new Date().toISOString()}] Scan this QR code with WhatsApp:\n`);
       qrcode.generate(qr, { small: true });
       console.log('\n');
+      // Also expose via /api/qr for Railway browser-based scanning
+      setLatestQrCode(qr);
     }
 
     if (connection) {
@@ -245,6 +248,9 @@ export async function connectToWhatsApp(onConnected: MessageHandler): Promise<vo
     if (connection === 'open') {
       lastConnectedAt = Date.now();
       reconnectAttempts = 0;
+
+      // Clear QR code — no longer needed
+      clearLatestQrCode();
 
       // Capture bot's own JID and LID
       botJid = sock?.user?.id || null;

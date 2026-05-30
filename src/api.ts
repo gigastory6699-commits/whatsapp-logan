@@ -13,6 +13,23 @@ const app = express();
 app.use(express.json());
 
 // ============================================================================
+// QR CODE STATE (for Railway browser-based scanning)
+// ============================================================================
+let latestQrCode: string | null = null;
+let qrGeneratedAt: Date | null = null;
+
+export function setLatestQrCode(qr: string): void {
+  latestQrCode = qr;
+  qrGeneratedAt = new Date();
+  console.log(`[${new Date().toISOString()}] [QR] New QR code available at /api/qr`);
+}
+
+export function clearLatestQrCode(): void {
+  latestQrCode = null;
+  qrGeneratedAt = null;
+}
+
+// ============================================================================
 // MESSAGE QUEUE SYSTEM
 // ============================================================================
 
@@ -812,14 +829,144 @@ app.post('/api/broadcast', async (req: Request, res: Response) => {
 });
 
 // ============================================================================
+// QR CODE ENDPOINT (Railway browser-based scanning)
+// ============================================================================
+
+// Public endpoint (no API key needed) - shows QR code as HTML page
+// Open https://your-app.railway.app/api/qr to scan WhatsApp QR code
+app.get('/api/qr', (_req: Request, res: Response) => {
+  if (isConnected()) {
+    res.send(`
+      <!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Logan Bot - Connected</title>
+      <style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#0a0a0a;color:#22c55e;text-align:center;}</style>
+      </head><body>
+        <div>
+          <h1>✅ WhatsApp Connected!</h1>
+          <p>Logan Bot is connected and running.</p>
+          <p style="color:#6b7280;font-size:14px;">You don't need to scan QR code again.</p>
+        </div>
+      </body></html>
+    `);
+    return;
+  }
+
+  if (!latestQrCode) {
+    res.send(`
+      <!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Logan Bot - Waiting for QR</title>
+      <meta http-equiv="refresh" content="5">
+      <style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#0a0a0a;color:#f59e0b;text-align:center;}</style>
+      </head><body>
+        <div>
+          <h1>⏳ Waiting for QR Code...</h1>
+          <p>The bot is starting up. This page will auto-refresh every 5 seconds.</p>
+          <p style="color:#6b7280;font-size:14px;">Make sure the bot is running and check Railway logs.</p>
+        </div>
+      </body></html>
+    `);
+    return;
+  }
+
+  // Encode QR as data URL using qrcode library feel
+  // We use the raw string and let the browser render it via a QR JS library
+  const qrAge = qrGeneratedAt ? Math.round((Date.now() - qrGeneratedAt.getTime()) / 1000) : 0;
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Logan Bot - Scan QR Code</title>
+      <meta http-equiv="refresh" content="30">
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          background: #0a0a0a;
+          color: #fff;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          min-height: 100vh;
+          padding: 20px;
+        }
+        .card {
+          background: #1a1a1a;
+          border: 1px solid #2a2a2a;
+          border-radius: 16px;
+          padding: 40px;
+          text-align: center;
+          max-width: 500px;
+          width: 100%;
+        }
+        h1 { color: #22c55e; margin-bottom: 8px; font-size: 24px; }
+        p { color: #9ca3af; margin-bottom: 20px; font-size: 14px; }
+        #qr-container {
+          background: #fff;
+          padding: 20px;
+          border-radius: 12px;
+          display: inline-block;
+          margin: 20px 0;
+        }
+        .age { color: #6b7280; font-size: 12px; margin-top: 16px; }
+        .steps {
+          text-align: left;
+          background: #111;
+          border-radius: 8px;
+          padding: 16px;
+          margin-top: 20px;
+          font-size: 13px;
+          line-height: 1.8;
+          color: #9ca3af;
+        }
+        .steps strong { color: #fff; }
+      </style>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    </head>
+    <body>
+      <div class="card">
+        <h1>📱 Scan to Connect WhatsApp</h1>
+        <p>Open WhatsApp on your phone → Linked Devices → Link a Device</p>
+        <div id="qr-container">
+          <div id="qrcode"></div>
+        </div>
+        <div class="age">QR generated ${qrAge}s ago &bull; Page auto-refreshes every 30s</div>
+        <div class="steps">
+          <strong>Steps:</strong><br>
+          1. Open <strong>WhatsApp</strong> on your phone<br>
+          2. Tap <strong>⋮ Menu → Linked Devices</strong><br>
+          3. Tap <strong>Link a Device</strong><br>
+          4. Scan the QR code above
+        </div>
+      </div>
+      <script>
+        new QRCode(document.getElementById('qrcode'), {
+          text: ${JSON.stringify(latestQrCode)},
+          width: 256,
+          height: 256,
+          colorDark: '#000000',
+          colorLight: '#ffffff',
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+// ============================================================================
 // SERVER STARTUP
 // ============================================================================
 
 export function startApiServer(): void {
-  const port = parseInt(process.env.API_PORT || '7700', 10);
+  // Railway injects PORT env var — use it first, then API_PORT, then default 7700
+  const port = parseInt(process.env.PORT || process.env.API_PORT || '7700', 10);
 
-  app.listen(port, () => {
+  app.listen(port, '0.0.0.0', () => {
     console.log(`[${new Date().toISOString()}] API server running on port ${port}`);
+    console.log(`[${new Date().toISOString()}] QR Code page: /api/qr`);
+    console.log(`[${new Date().toISOString()}] Health check: /api/health`);
     console.log(`[${new Date().toISOString()}] Message queue enabled with ${DELAY_BETWEEN_MESSAGES_MS / 1000}s delay between messages`);
     if (!process.env.API_KEY) {
       console.log(`[${new Date().toISOString()}] WARNING: API_KEY not set - API authentication is disabled`);
