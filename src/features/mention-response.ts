@@ -1278,10 +1278,10 @@ export async function handleMention(
 
     try {
       console.log('[MENTION] DEBUG: STEP 3 - Calling LLM...');
-      // Get context - keep it small to reduce token usage and avoid rate limits
+      // Get context - deeper history for smarter contextual responses
       const [groupMessages, userMessages] = await Promise.all([
-        getGroupMessages(groupId, 15),
-        getUserMessages(groupId, senderNumber, 5)
+        getGroupMessages(groupId, 25),
+        getUserMessages(groupId, senderNumber, 8)
       ]);
 
       // Check if this query needs real-time web search (restricted to admin and brain emoji group)
@@ -1599,10 +1599,10 @@ export async function handleVoiceMention(
 
     try {
       console.log('[VOICE] DEBUG: STEP 3 - Calling LLM...');
-      // Get context - keep it small to reduce token usage and avoid rate limits
+      // Get context - deeper history for smarter contextual responses
       const [groupMessages, userMessages] = await Promise.all([
-        getGroupMessages(groupId, 15),
-        getUserMessages(groupId, senderNumber, 5)
+        getGroupMessages(groupId, 25),
+        getUserMessages(groupId, senderNumber, 8)
       ]);
 
       // Check if this query needs real-time web search (restricted to admin and brain emoji group)

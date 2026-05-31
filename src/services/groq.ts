@@ -231,16 +231,73 @@ export function buildMentionPrompt(
     minute: '2-digit'
   });
 
+  // --- Smart Intent Detection ---
+  const msg = currentMessage.toLowerCase();
+
+  // Detect mood/emotion
+  const isAngry = /غاضب|زعلان|مزعوج|محبط|ضايق|بكره|ما احب|مش تمام|حظ سيئ|!{2,}|wtf|damn|ugh|frustrated|angry/i.test(currentMessage);
+  const isSad = /حزين|تعبان|زهقت|مللت|ما في فايدة|يأس|وحيد|😢|😞|😔|☹️|sad|tired|lonely|depressed/i.test(currentMessage);
+  const isExcited = /رائع|ممتاز|وووو|يييي|🔥|🚀|amazing|awesome|excited|can't wait|love it|❤️|😍|🎉/i.test(currentMessage);
+  const isConfused = /مش فاهم|ما فهمت|ازاي|كيف بالضبط|وضح|اشرح|confused|how exactly|what do you mean|can you explain/i.test(currentMessage);
+
+  // Detect question type
+  const isHowQuestion = /^(كيف|how|wie|كيف يمكن)/i.test(currentMessage.trim());
+  const isWhyQuestion = /^(ليه|لماذا|why|ليش)/i.test(currentMessage.trim());
+  const isWhatQuestion = /^(ايه|ما هو|what is|what are|ما هي)/i.test(currentMessage.trim());
+  const isCompareQuestion = /مقارنة|الفرق بين|vs|versus|compare|better|أفضل|ايهما/i.test(currentMessage);
+  const isListRequest = /اعطني|أعطني|قائمة|list|examples|أمثلة|enumerate|اذكر|خطوات|steps/i.test(currentMessage);
+  const isDeepTopic = /ذكاء اصطناعي|ai |machine learning|تعلم الآلة|neural|blockchain|quantum|استراتيجي|تحليل|فلسفة|psychology|economics/i.test(currentMessage);
+
+  // Build smart hints for the LLM
+  let smartHints = '\n=== SMART RESPONSE HINTS ===\n';
+
+  if (isAngry) smartHints += '⚠️ USER MOOD: Seems frustrated/angry. Acknowledge their frustration first, be direct and helpful, skip pleasantries.\n';
+  if (isSad) smartHints += '💙 USER MOOD: Seems sad/tired. Be warm and empathetic, show genuine care before answering.\n';
+  if (isExcited) smartHints += '⚡ USER MOOD: Excited/enthusiastic. Match their energy! Be lively and engaging.\n';
+  if (isConfused) smartHints += '🧩 USER MOOD: Confused. Go step by step, use simple language, give a concrete example.\n';
+
+  if (isHowQuestion) smartHints += '📋 FORMAT: HOW question → give numbered steps or a clear process.\n';
+  if (isWhyQuestion) smartHints += '🔍 FORMAT: WHY question → give the core reason first, then supporting explanation.\n';
+  if (isWhatQuestion) smartHints += '📖 FORMAT: WHAT question → define clearly, then give context/examples.\n';
+  if (isCompareQuestion) smartHints += '⚖️ FORMAT: COMPARISON → use a structured pros/cons or side-by-side breakdown.\n';
+  if (isListRequest) smartHints += '📝 FORMAT: LIST requested → use bullet points or numbered list.\n';
+  if (isDeepTopic) smartHints += '🧠 FORMAT: DEEP TOPIC → think step by step (chain of thought), be thorough and analytical.\n';
+
+  // Code detection
+  const hasCode = /```|`[^`]+`|def |function |const |let |var |import |class |if \(|for \(|\bpython\b|\bjavascript\b|\btypescript\b|SELECT |FROM |WHERE /i.test(currentMessage);
+  if (hasCode) smartHints += '💻 CODE DETECTED: Analyze the code. Identify what it does, find bugs, suggest improvements. Format your code blocks with proper ```language markers.\n';
+
+  // Urgency detection
+  const isUrgent = /مستعجل|urgent|asap|الآن|بسرعة|now|immediately|فوري|على طول|hurry/i.test(currentMessage);
+  if (isUrgent) smartHints += '🚨 URGENT: Skip intro. First line = the solution/answer directly. Be concise and fast.\n';
+
+  // User style detection based on message length and vocabulary
+  const wordCount = currentMessage.split(/\s+/).length;
+  const hasTechnicalVocab = /api|sdk|runtime|backend|frontend|deployment|docker|kubernetes|async|await|promise|callback|webhook/i.test(currentMessage);
+  if (wordCount < 5) smartHints += '✂️ STYLE: Short message → keep response concise and punchy too.\n';
+  if (wordCount > 30) smartHints += '📜 STYLE: Detailed message → respond with matching depth and detail.\n';
+  if (hasTechnicalVocab) smartHints += '🔧 STYLE: Technical user → use precise technical language, don\'t over-explain basics.\n';
+
+  // Conversation depth indicator
+  if (messageCount >= 15) smartHints += `📚 CONTEXT: Rich conversation history (${messageCount} msgs) — use it! Reference previous context if relevant.\n`;
+
+  if (!isAngry && !isSad && !isExcited && !isConfused && !isHowQuestion && !isWhyQuestion && !isWhatQuestion && !isCompareQuestion && !isListRequest && !isDeepTopic && !hasCode && !isUrgent) {
+    smartHints += '💬 FORMAT: Casual message → respond naturally and conversationally.\n';
+  }
+
+  smartHints += '=== END HINTS ===\n';
+
+
   let prompt = `=== CURRENT DATE & TIME (Jerusalem, Israel) ===
 ${jerusalemDate}, ${jerusalemTime}
 
 === CONVERSATION CONTEXT (last ${messageCount} messages) ===
 ${groupContext}
 
-=== ${senderName}'s recent messages ===
-${userHistory}
-
-=== CURRENT QUESTION from ${senderName} ===
+=== ${senderName}'s recent messages (their style & history) ===
+${userHistory || '(no previous messages)'}
+${smartHints}
+=== CURRENT MESSAGE from ${senderName} ===
 ${currentMessage}`;
 
   // Append web search results if available
@@ -250,3 +307,4 @@ ${currentMessage}`;
 
   return prompt;
 }
+
