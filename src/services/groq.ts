@@ -4,6 +4,27 @@ import { LOGAN_SYSTEM_PROMPT, LOGAN_FREE_CHAT_PROMPT } from '../prompts/logan';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL_PRIMARY = 'openai/gpt-oss-120b';
 const GROQ_MODEL_FALLBACK = 'openai/gpt-oss-20b';
+const GROQ_MODEL_LARGE_CTX = 'llama-3.3-70b-versatile'; // Higher TPM limit - use when others hit 413
+
+// Rough token estimation: ~4 chars per token
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+// Truncate a prompt to fit within a token budget (leaves room for system prompt + response)
+function truncatePrompt(prompt: string, maxTokens: number = 5500): string {
+  const estimated = estimateTokens(prompt);
+  if (estimated <= maxTokens) return prompt;
+
+  // Trim from the middle (keep beginning context + current message at end)
+  const targetChars = maxTokens * 4;
+  const keepStart = Math.floor(targetChars * 0.3);
+  const keepEnd = Math.floor(targetChars * 0.7);
+  const startPart = prompt.slice(0, keepStart);
+  const endPart = prompt.slice(prompt.length - keepEnd);
+  console.log(`[LOGAN] Prompt truncated: ${estimated} → ~${estimateTokens(startPart + endPart)} tokens`);
+  return startPart + '\n...\n[سياق محذوف لتجنز حد الطول]\n...\n' + endPart;
+}
 
 // Claude API (Fallback)
 const CLAUDE_API_URL = 'https://api.anthropic.com/v1/messages';
@@ -152,9 +173,15 @@ export async function callGroq(userPrompt: string, useFreeChatPrompt: boolean = 
   }
   console.log(`[LOGAN] ========================================`);
 
+  // Truncate prompt if too large to avoid 413 errors (keep system prompt intact)
+  const safeUserPrompt = truncatePrompt(userPrompt, 5500);
+  if (safeUserPrompt !== userPrompt) {
+    console.log(`[LOGAN] Prompt was truncated to fit token limit`);
+  }
+
   const messages: GroqMessage[] = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt }
+    { role: 'user', content: safeUserPrompt }
   ];
 
   // Try Groq first (Primary) - faster and cheaper
@@ -179,6 +206,17 @@ export async function callGroq(userPrompt: string, useFreeChatPrompt: boolean = 
     }
 
     console.log(`[LOGAN] Groq secondary failed: ${secondaryResult.error}`);
+
+    // Try Groq large-context model (llama-3.3-70b) - higher TPM, last Groq resort
+    console.log(`[LOGAN] Trying Groq large-ctx model: ${GROQ_MODEL_LARGE_CTX}`);
+    const largeCtxResult = await callGroqWithModel(groqApiKey, messages, GROQ_MODEL_LARGE_CTX);
+
+    if (largeCtxResult.success && largeCtxResult.content) {
+      console.log(`[LOGAN] Groq large-ctx succeeded`);
+      return largeCtxResult.content;
+    }
+
+    console.log(`[LOGAN] Groq large-ctx failed: ${largeCtxResult.error}`);
   } else {
     console.log(`[LOGAN] GROQ_API_KEY not configured, skipping Groq`);
   }

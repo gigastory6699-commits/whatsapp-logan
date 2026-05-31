@@ -10,7 +10,8 @@
     "watch": "tsc -w",
     "shavua-tov": "ts-node src/scripts/shavua-tov.ts",
     "manual-join-requests": "ts-node scripts/manual-join-request-check.ts",
-    "debug-admin": "ts-node scripts/debug-admin-status.ts"
+    "debug-admin": "ts-node scripts/debug-admin-status.ts",
+    "clear-auth": "ts-node scripts/clear-auth.ts"
   },
   "keywords": [
     "whatsapp",

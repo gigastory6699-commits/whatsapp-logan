@@ -8,10 +8,13 @@ import makeWASocket, {
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import * as qrcode from 'qrcode-terminal';
+import * as fs from 'fs';
+import * as path from 'path';
 import { AUTH_FOLDER, MAX_RECONNECT_ATTEMPTS } from './config';
 import { checkIfCurrentlyShabbat } from './shabbatLocker';
 import { useSupabaseAuthState, isSupabaseAuthAvailable } from './services/supabase-auth-state';
 import { setLatestQrCode, clearLatestQrCode } from './api';
+import { getSupabaseClient } from './supabase';
 
 let sock: WASocket | null = null;
 let reconnectAttempts = 0;
@@ -240,7 +243,40 @@ export async function connectToWhatsApp(onConnected: MessageHandler): Promise<vo
         }
       } else {
         console.log(
-          `[${new Date().toISOString()}] Logged out. Delete auth_info folder and restart to re-authenticate.`
+          `[${new Date().toISOString()}] Logged out. Cleaning up credentials automatically...`
+        );
+        
+        // 1. Clear local auth_info folder
+        const resolvedAuthFolder = path.resolve(process.cwd(), AUTH_FOLDER);
+        if (fs.existsSync(resolvedAuthFolder)) {
+          try {
+            fs.rmSync(resolvedAuthFolder, { recursive: true, force: true });
+            console.log(`[${new Date().toISOString()}] [AUTH-CLEANUP] Deleted local folder: ${resolvedAuthFolder}`);
+          } catch (err) {
+            console.error(`[${new Date().toISOString()}] [AUTH-CLEANUP] Error deleting local folder:`, err);
+          }
+        }
+
+        // 2. Clear Supabase auth state table
+        const supabase = getSupabaseClient();
+        if (supabase) {
+          try {
+            const { error } = await supabase
+              .from('whatsapp_auth_state')
+              .delete()
+              .neq('key', '');
+            if (error) {
+              console.error(`[${new Date().toISOString()}] [AUTH-CLEANUP] Error clearing Supabase auth table:`, error.message);
+            } else {
+              console.log(`[${new Date().toISOString()}] [AUTH-CLEANUP] Successfully cleared whatsapp_auth_state in Supabase!`);
+            }
+          } catch (err) {
+            console.error(`[${new Date().toISOString()}] [AUTH-CLEANUP] Exception clearing Supabase auth table:`, err);
+          }
+        }
+        
+        console.log(
+          `[${new Date().toISOString()}] Logged out. Credentials cleared. Restart the bot to re-authenticate.`
         );
       }
     }

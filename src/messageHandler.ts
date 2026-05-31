@@ -940,6 +940,9 @@ _For more inquiries, feel free to chat with me anytime!_`;
         // For groups: trigger on mention, reply, or text trigger (if allowed for sender)
         // For channels: never trigger (no mentions in channels)
 
+        // LOGAN_FREE_CHAT_MODE: when true, respond to ALL messages in ALL groups (no trigger needed)
+        const freeChatMode = process.env.LOGAN_FREE_CHAT_MODE === 'true';
+
         // Check for text-based Logan trigger ("לוגן", "לוגאן", "logan")
         // Admin can use text triggers in ANY group or DM
         // Other users can only use text triggers in FREE_CHAT_GROUPS
@@ -947,10 +950,13 @@ _For more inquiries, feel free to chat with me anytime!_`;
         const hasLoganTextTrigger = processedMessage.body && containsLoganTextTrigger(processedMessage.body);
         const isTextTrigger = hasLoganTextTrigger && isTextTriggerAllowed(chatId, senderNum);
 
-        const shouldTriggerWebhook = !isChannel && (isDM || botMentioned || replyToBot || isTextTrigger);
+        // In free chat mode, ALL group messages trigger the bot (like a DM)
+        const isFreeChatTrigger = freeChatMode && isGroup && !!processedMessage.body;
+
+        const shouldTriggerWebhook = !isChannel && (isDM || botMentioned || replyToBot || isTextTrigger || isFreeChatTrigger);
 
         if (shouldTriggerWebhook) {
-          const triggerType = isDM ? 'DM' : (botMentioned ? 'mentioned' : (replyToBot ? 'reply' : 'text-trigger'));
+          const triggerType = isDM ? 'DM' : (botMentioned ? 'mentioned' : (replyToBot ? 'reply' : (isTextTrigger ? 'text-trigger' : 'free-chat')));
           console.log(`[${new Date().toISOString()}] Bot ${triggerType} ${isDM ? 'from' : 'in'} ${processedMessage.chat_name || 'DM'} by ${processedMessage.sender_name || processedMessage.sender_number}`);
 
           // Get quoted message text (if this is a reply)
@@ -968,7 +974,7 @@ _For more inquiries, feel free to chat with me anytime!_`;
           const conversationHistory = await getConversationHistory(
             processedMessage.chat_id,
             botNumbers,
-            10 // Last 10 messages
+            5 // Last 5 messages (reduced from 10 to stay within Groq TPM limits)
           );
 
           await sendMentionWebhook({
@@ -984,7 +990,7 @@ _For more inquiries, feel free to chat with me anytime!_`;
           });
 
           // AI Mention Response (for groups when mentioned/replied/text-triggered, or for all DMs)
-          if (isMentionResponseEnabled() && (isDM || (isGroup && (botMentioned || replyToBot || isTextTrigger)))) {
+          if (isMentionResponseEnabled() && (isDM || (isGroup && (botMentioned || replyToBot || isTextTrigger || isFreeChatTrigger)))) {
             // Check if message has an image to forward to Logan
             let imageResult: DownloadedImage | null = null;
             if (hasImage(message)) {
