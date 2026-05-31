@@ -4,7 +4,7 @@ import { LOGAN_SYSTEM_PROMPT, LOGAN_FREE_CHAT_PROMPT } from '../prompts/logan';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL_PRIMARY = 'llama-3.3-70b-versatile'; // Primary, extremely powerful LLaMA 3.3 70B
 const GROQ_MODEL_FALLBACK = 'llama-3.1-8b-instant'; // Fallback, extremely fast LLaMA 3.1 8B
-const GROQ_MODEL_LARGE_CTX = 'mixtral-8x7b-32768'; // High context fallback Mixtral 8x7B
+const GROQ_MODEL_LARGE_CTX = 'gemma2-9b-it'; // Fallback Gemma 2 9B model
 
 // Rough token estimation: ~4 chars per token
 function estimateTokens(text: string): number {
@@ -12,7 +12,7 @@ function estimateTokens(text: string): number {
 }
 
 // Truncate a prompt to fit within a token budget (leaves room for system prompt + response)
-function truncatePrompt(prompt: string, maxTokens: number = 5500): string {
+function truncatePrompt(prompt: string, maxTokens: number = 1500): string {
   const estimated = estimateTokens(prompt);
   if (estimated <= maxTokens) return prompt;
 
@@ -174,7 +174,7 @@ export async function callGroq(userPrompt: string, useFreeChatPrompt: boolean = 
   console.log(`[LOGAN] ========================================`);
 
   // Truncate prompt if too large to avoid 413 errors (keep system prompt intact)
-  const safeUserPrompt = truncatePrompt(userPrompt, 5500);
+  const safeUserPrompt = truncatePrompt(userPrompt, 1500);
   if (safeUserPrompt !== userPrompt) {
     console.log(`[LOGAN] Prompt was truncated to fit token limit`);
   }
