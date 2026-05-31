@@ -907,9 +907,41 @@ app.get('/api/qr', (_req: Request, res: Response) => {
           padding: 20px;
           border-radius: 12px;
           display: inline-block;
-          margin: 20px 0;
+          margin: 20px 0 10px 0;
         }
-        .age { color: #6b7280; font-size: 12px; margin-top: 16px; }
+        .action-buttons {
+          margin: 15px 0;
+          display: flex;
+          gap: 10px;
+          justify-content: center;
+        }
+        .action-buttons button {
+          background: #22c55e;
+          color: #1a1a1a;
+          border: none;
+          padding: 10px 18px;
+          border-radius: 8px;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .action-buttons button:hover {
+          background: #1cb854;
+          transform: translateY(-1px);
+        }
+        #btn-copy {
+          background: #374151;
+          color: #fff;
+          border: 1px solid #4b5563;
+        }
+        #btn-copy:hover {
+          background: #4b5563;
+        }
+        .age { color: #6b7280; font-size: 12px; margin-top: 10px; }
         .steps {
           text-align: left;
           background: #111;
@@ -931,6 +963,12 @@ app.get('/api/qr', (_req: Request, res: Response) => {
         <div id="qr-container">
           <div id="qrcode"></div>
         </div>
+        
+        <div class="action-buttons">
+          <button id="btn-download" onclick="downloadQR()">📥 تنزيل الصورة (Download)</button>
+          <button id="btn-copy" onclick="copyQRValue()">📋 نسخ الرمز (Copy Value)</button>
+        </div>
+
         <div class="age">QR generated ${qrAge}s ago &bull; Page auto-refreshes every 30s</div>
         <div class="steps">
           <strong>Steps:</strong><br>
@@ -949,6 +987,36 @@ app.get('/api/qr', (_req: Request, res: Response) => {
           colorLight: '#ffffff',
           correctLevel: QRCode.CorrectLevel.M
         });
+
+        // Function to download the rendered QR code as PNG image
+        function downloadQR() {
+          const qrImg = document.querySelector('#qrcode img');
+          if (qrImg && qrImg.src) {
+            const link = document.createElement('a');
+            link.href = qrImg.src;
+            link.download = 'logan_whatsapp_qr.png';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          } else {
+            alert('يرجى الانتظار حتى يتم توليد الرمز بالكامل (Please wait for QR to load)');
+          }
+        }
+
+        // Function to copy raw QR text to clipboard
+        function copyQRValue() {
+          const qrValue = ${JSON.stringify(latestQrCode)};
+          navigator.clipboard.writeText(qrValue).then(() => {
+            const btn = document.getElementById('btn-copy');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '✅ تم النسخ! (Copied)';
+            setTimeout(() => {
+              btn.innerHTML = originalText;
+            }, 2000);
+          }).catch(err => {
+            alert('فشل في النسخ (Failed to copy): ' + err);
+          });
+        }
       </script>
     </body>
     </html>
