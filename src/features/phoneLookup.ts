@@ -1,6 +1,6 @@
 import { WASocket, proto } from '@whiskeysockets/baileys';
 import { ALLOWED_GROUPS } from '../config';
-import { saveMessage } from '../supabase';
+import { saveMessage, getSupabaseClient } from '../supabase';
 import { WhatsAppMessage } from '../types';
 import { markdownToWhatsApp } from '../utils/formatting';
 
@@ -170,10 +170,23 @@ export async function handlePhoneNumberLookup(
     let bioDateStr: string | null = null;
     let businessProfile: any = null;
 
-    const [picPromise, statusPromise, bizPromise] = await Promise.allSettled([
+    // Database intelligence fields
+    let mutualGroups: string[] = [];
+    let recentChats: string[] = [];
+    let recentMessages: any[] = [];
+
+    const supabase = getSupabaseClient();
+    const dbPromises = supabase ? [
+      supabase.from('whatsapp_messages').select('chat_name').eq('sender_number', normalizedNumber).eq('is_group', true).order('timestamp', { ascending: false }).limit(50),
+      supabase.from('whatsapp_messages').select('chat_id, chat_name').eq('sender_number', normalizedNumber).eq('is_group', false).order('timestamp', { ascending: false }).limit(50),
+      supabase.from('whatsapp_messages').select('chat_name, body, timestamp').eq('sender_number', normalizedNumber).not('body', 'is', null).order('timestamp', { ascending: false }).limit(3)
+    ] : [Promise.resolve(null), Promise.resolve(null), Promise.resolve(null)];
+
+    const [picPromise, statusPromise, bizPromise, dbGroupsRes, dbDmsRes, dbMsgsRes] = await Promise.allSettled([
       sock.profilePictureUrl(jid, 'image').catch(() => null),
       sock.fetchStatus(jid).catch(() => null),
-      sock.getBusinessProfile(jid).catch(() => null)
+      sock.getBusinessProfile(jid).catch(() => null),
+      ...dbPromises
     ]);
 
     if (picPromise.status === 'fulfilled' && picPromise.value) {
@@ -197,6 +210,28 @@ export async function handlePhoneNumberLookup(
 
     if (bizPromise.status === 'fulfilled' && bizPromise.value) {
       businessProfile = bizPromise.value;
+    }
+
+    // Process Supabase results
+    if (dbGroupsRes.status === 'fulfilled' && dbGroupsRes.value) {
+      const res = dbGroupsRes.value as any;
+      if (res?.data) {
+        mutualGroups = Array.from(new Set<string>(res.data.map((g: any) => g.chat_name))).slice(0, 3);
+      }
+    }
+
+    if (dbDmsRes.status === 'fulfilled' && dbDmsRes.value) {
+      const res = dbDmsRes.value as any;
+      if (res?.data) {
+        recentChats = Array.from(new Set<string>(res.data.map((d: any) => d.chat_name === 'DM' ? d.chat_id.split('@')[0] : d.chat_name))).slice(0, 3);
+      }
+    }
+
+    if (dbMsgsRes.status === 'fulfilled' && dbMsgsRes.value) {
+      const res = dbMsgsRes.value as any;
+      if (res?.data) {
+        recentMessages = res.data || [];
+      }
     }
 
     // 3. Formulate the response card
@@ -246,6 +281,35 @@ export async function handlePhoneNumberLookup(
       responseText += `🖼️ *الصورة الشخصية:* ${profilePicUrl}\n\n`;
     } else {
       responseText += `🖼️ *الصورة الشخصية:* غير متوفرة بسبب إعدادات الخصوصية 🔒\n\n`;
+    }
+
+    // Database Intelligence section
+    if (supabase) {
+      responseText += `*📊 السجلات الاستخباراتية النشطة في البوت:*\n`;
+      
+      // Mutual Groups
+      if (mutualGroups.length > 0) {
+        responseText += `👥 *المجموعات المشتركة المرصودة:* \n` +
+          mutualGroups.map(g => `  • ${g}`).join('\n') + `\n`;
+      } else {
+        responseText += `👥 *المجموعات المشتركة المرصودة:* لا توجد مجموعات مرصودة مشتركة حالياً.\n`;
+      }
+
+      // Direct DM Chats / Contacts
+      if (recentChats.length > 0) {
+        responseText += `🔗 *جهات الاتصال النشطة بالخاص:* \n` +
+          recentChats.map(c => `  • ${c}`).join('\n') + `\n`;
+      }
+
+      // Recent statements
+      if (recentMessages.length > 0) {
+        responseText += `💬 *آخر تصريحاته ومواضيع حديثه:* \n` +
+          recentMessages.map((m, index) => {
+            return `  ${index + 1}. في شات *[${m.chat_name}]*:\n  "${m.body}"`;
+          }).join('\n') + `\n\n`;
+      } else {
+        responseText += `💬 *آخر تصريحاته في السجلات:* لا توجد رسائل مسجلة له في قاعدة البيانات حتى الآن.\n\n`;
+      }
     }
 
     // Quick direct message link
