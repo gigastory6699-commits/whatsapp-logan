@@ -34,17 +34,25 @@ async function ensureAuthTable(): Promise<boolean> {
       .select('key')
       .limit(1);
 
-    if (error && error.code === '42P01') {
-      // Table doesn't exist - it needs to be created via SQL
-      console.log('[AUTH-DB] Auth table does not exist. Please create it with:');
-      console.log(`
+    if (error) {
+      // If network fetch failed or invalid project URL, auth is NOT available
+      if (error.message?.includes('fetch failed') || error.message?.includes('TypeError')) {
+        console.error('[AUTH-DB] Supabase is unreachable (network error)');
+        return false;
+      }
+
+      if (error.code === '42P01') {
+        // Table doesn't exist - it needs to be created via SQL
+        console.log('[AUTH-DB] Auth table does not exist. Please create it with:');
+        console.log(`
 CREATE TABLE ${AUTH_TABLE} (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-      `);
-      return false;
+        `);
+        return false;
+      }
     }
 
     return true;
@@ -211,7 +219,19 @@ export async function isSupabaseAuthAvailable(): Promise<boolean> {
       .select('key')
       .limit(1);
 
-    return !error || error.code !== '42P01';
+    if (error) {
+      // If network fetch failed or invalid project URL, auth is NOT available
+      if (error.message?.includes('fetch failed') || error.message?.includes('TypeError')) {
+        console.warn('[AUTH-DB] Supabase is unreachable (network error), falling back to file auth');
+        return false;
+      }
+      // If table doesn't exist, it's not available
+      if (error.code === '42P01') {
+        return false;
+      }
+    }
+
+    return true;
   } catch {
     return false;
   }
