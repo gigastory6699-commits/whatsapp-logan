@@ -239,6 +239,19 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 function apiKeyAuth(req: Request, res: Response, next: NextFunction): void {
   const apiKey = process.env.API_KEY;
 
+  // Skip authentication for public endpoints (like QR page and health check)
+  // to allow easy browser scanning and uptime checks
+  const isPublicRoute = 
+    req.path === '/qr' || 
+    req.path === '/health' || 
+    req.originalUrl.includes('/api/qr') || 
+    req.originalUrl.includes('/api/health');
+
+  if (isPublicRoute) {
+    next();
+    return;
+  }
+
   // Skip authentication if API_KEY is not set (local development)
   if (!apiKey) {
     next();
