@@ -94,6 +94,12 @@ const FRESH_DATA_PATTERNS = [
   /روابط/i,
   /قناة/i,
   /قناه/i,
+  /الطقس/i,
+  /طقس/i,
+  /درجة الحرارة/i,
+  /درجه الحراره/i,
+  /الجو في/i,
+  /المناخ/i,
 
   // Explicit search/browse commands (English)
   /browse/i,
@@ -108,6 +114,9 @@ const FRESH_DATA_PATTERNS = [
   /visit/i,
   /google/i,
   /web search/i,
+  /weather/i,
+  /temperature/i,
+  /forecast/i,
 
   // URL patterns - if message contains a URL, likely needs web
   /https?:\/\//i,
