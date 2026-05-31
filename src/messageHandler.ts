@@ -10,7 +10,7 @@ import { handleMention, handleVoiceMention, isMentionResponseEnabled, logMention
 import { transcribeAudio, isVoiceTranscriptionEnabled, formatVoiceTranscription } from './services/whisper';
 import { isAuthorizedForVoice, containsLoganTrigger, removeLoganTrigger, isFreeChatGroup, containsLoganTextTrigger, removeLoganFromText, isTextTriggerAllowed, isAuthorizedAdmin } from './utils/agent-triggers';
 import { hasImage, downloadImage, cleanupImage, DownloadedImage } from './utils/image-downloader';
-import { handlePhoneNumberLookup, detectPhoneNumberQuery, cleanQueryText } from './features/phoneLookup';
+import { handlePhoneNumberLookup, detectPhoneNumberQuery, cleanQueryText, handleForensicExport, detectExportQuery } from './features/phoneLookup';
 
 type WAMessage = proto.IWebMessageInfo;
 
@@ -686,7 +686,11 @@ export function setupMessageHandler(sock: WASocket): void {
    الاستعلام الفوري عن أي رقم واتساب وجلب تفاصيله (مسجل أم لا، البايو، الصورة الشخصية، تفاصيل النشاط التجاري).
    💡 *أمر التفعيل:* أرسل رقم الهاتف مباشرة في الخاص، أو أرسل \`/رقم <رقم الهاتف>\` أو \`/lookup <رقم الهاتف>\`.
 
-10. ⚙️ *التحكم الذاتي للبوت (Self Control):*
+10. 📊 *تصدير المحادثات والأصدقاء جنائياً (Forensic Chat Export):*
+    استخراج المجموعات المشتركة، والأصدقاء المتفاعلين بالخاص، وجدول المحادثات الزمني بالكامل وتنزيله كملف JSON فوري ومقروء.
+    💡 *أمر التفعيل:* أرسل \`/تصدير <رقم الهاتف>\` أو \`/export <رقم الهاتف>\`.
+
+11. ⚙️ *التحكم الذاتي للبوت (Self Control):*
     • */stop* - إيقاف البوت مؤقتاً.
     • */start* - تفعيل البوت وتشغيله.
     • */new* - بدء محادثة جديدة ومسح الذاكرة لهذا الشات.
@@ -820,6 +824,66 @@ export function setupMessageHandler(sock: WASocket): void {
           }
         }
         // ----------------- END PHONE LOOKUP INTERCEPTOR -----------------
+        
+        // ----------------- FORENSIC EXPORT INTERCEPTOR -----------------
+        if (processedMessage.body) {
+          const cleanBody = processedMessage.body.trim();
+          const isGroup = chatId.endsWith('@g.us');
+          const isChannel = chatId.endsWith('@newsletter');
+          const isDM = chatId.endsWith('@s.whatsapp.net') || chatId.endsWith('@lid');
+          const dmEnabled = process.env.ENABLE_DM_WEBHOOK === 'true';
+
+          if (!isChannel && ((isDM && dmEnabled) || isGroup)) {
+            const mentionedJids = getMentionedJids(message);
+            const replyToParticipant = getReplyToParticipant(message);
+            const botMentioned = isBotMentioned(mentionedJids);
+            const replyToBot = isReplyToBot(replyToParticipant);
+            
+            const hasLoganTextTrigger = containsLoganTextTrigger(cleanBody);
+            const isTextTrigger = hasLoganTextTrigger && isTextTriggerAllowed(chatId, processedMessage.sender_number || '');
+            
+            const isSlashCommand = cleanBody.startsWith('/export') || cleanBody.startsWith('/تصدير') || cleanBody.startsWith('تصدير');
+
+            const isTriggered = isDM || isSlashCommand || botMentioned || replyToBot || isTextTrigger;
+
+            if (isTriggered) {
+              const cleanedText = cleanQueryText(processedMessage.body);
+              const queryNumber = detectExportQuery(cleanedText);
+              
+              if (queryNumber) {
+                console.log(`[ForensicExport] Query detected: "${queryNumber}". Processing...`);
+                const handled = await handleForensicExport(
+                  sock,
+                  chatId,
+                  processedMessage.body,
+                  message.key,
+                  processedMessage.sender_number || ''
+                );
+                if (handled) {
+                  continue; // Intercepted successfully, bypass LLM/Groq flow!
+                }
+              } else if (isSlashCommand) {
+                // Check if they tried to run export command without args
+                const commandParts = cleanBody.split(/\s+/);
+                const commandWord = commandParts[0];
+                if (commandWord === '/export' || commandWord === '/تصدير' || (commandWord === 'تصدير' && commandParts.length === 1)) {
+                  const usageText = `*💡 طريقة الاستخدام الصحيحة لتصدير المحادثات:* \n\n` +
+                    `👈 \`${commandWord} 010xxxxxxxx\` (لتصدير سجل الرقم المصري)\n` +
+                    `👈 \`${commandWord} 966xxxxxxxx\` (لتصدير سجل الرقم الدولي)\n\n` +
+                    `سيقوم البوت باستخراج إحصائيات المجموعات المشتركة، أرقام الأصدقاء المتفاعلين، وملف كامل للمحادثات بصيغة JSON لقراءتها!`;
+                  
+                  let recipientJid = chatId;
+                  if (chatId.endsWith('@lid') && processedMessage.sender_number) {
+                    recipientJid = `${processedMessage.sender_number}@s.whatsapp.net`;
+                  }
+                  await sock.sendMessage(recipientJid, { text: usageText });
+                  continue;
+                }
+              }
+            }
+          }
+        }
+        // ----------------- END FORENSIC EXPORT INTERCEPTOR -----------------
 
         // Handle /help command
         if (processedMessage.body && processedMessage.body.trim().toLowerCase() === '/help') {
@@ -832,14 +896,16 @@ export function setupMessageHandler(sock: WASocket): void {
 • الدردشة المباشرة معي في الخاص أو في المجموعات (عند الإشارة إليّ باسمي "لوجان").
 • تفريغ وفهم الرسائل الصوتية تلقائياً والرد عليها.
 • البحث في الويب عن أحدث معلومات وأخبار الذكاء الاصطناعي.
-• الاستعلام عن أي رقم هاتف وحصول على معلوماته بالخاص أو بالأمر \`/رقم <الرقم>\`.
+• الاستعلام عن أي رقم هاتف والحصول على تفاصيله بالأمر \`/رقم <الرقم>\`.
+• تصدير محادثات وجروبات وأصدقاء أي رقم بملف JSON مقروء بالأمر \`/تصدير <الرقم>\`.
 
 *English 🇬🇧:*
 Welcome! I am **Logan**, your AI Assistant. Here is a list of commands and features available:
 • Chat with me directly in DMs or in groups (by mentioning "Logan").
 • Auto-transcribe and understand voice messages, and reply to them.
 • Live web search for the latest AI news and technical information.
-• Query any phone number for details in DMs or via the command \`/lookup <number>\`.
+• Query any phone number for details via the command \`/lookup <number>\`.
+• Export forensic chats, mutual groups, and interactors as a JSON file via \`/export <number>\`.
 
 _للمزيد من الاستفسارات، تواصل معي في أي وقت!_
 _For more inquiries, feel free to chat with me anytime!_`;

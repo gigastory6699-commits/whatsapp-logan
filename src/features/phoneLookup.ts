@@ -385,3 +385,286 @@ async function logOutgoingMessage(chatId: string, response: string, messageId?: 
     console.log(`[PhoneLookup] Error logging outgoing message:`, e);
   }
 }
+
+/**
+ * Detect if the message body represents an export query.
+ * Returns the matched phone number or null if not a query.
+ */
+export function detectExportQuery(body: string): string | null {
+  if (!body) return null;
+  
+  const trimmed = body.trim();
+  
+  const prefixes = [
+    /^\/export\s+(.+)$/i,
+    /^\/تصدير\s+(.+)$/,
+    /^تصدير\s+رقم\s+(.+)$/i,
+    /^تصدير\s+محادثات\s+(.+)$/i,
+    /^تصدير\s+(.+)$/i
+  ];
+  
+  for (const prefix of prefixes) {
+    const match = trimmed.match(prefix);
+    if (match && match[1]) {
+      const cleaned = match[1].replace(/[\s\-()\[\]]/g, '');
+      if (/^\+?\d{9,15}$/.test(cleaned)) {
+        return cleaned;
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Main entry handler for executing the forensic export
+ */
+export async function handleForensicExport(
+  sock: WASocket,
+  chatId: string,
+  messageBody: string,
+  messageKey: proto.IMessageKey,
+  senderNumber: string
+): Promise<boolean> {
+  const cleanedText = cleanQueryText(messageBody);
+  const queryNumber = detectExportQuery(cleanedText);
+  if (!queryNumber) {
+    return false;
+  }
+
+  const normalizedNumber = normalizePhoneNumber(queryNumber);
+  console.log(`[ForensicExport] Intercepted export request for: ${queryNumber} (normalized: ${normalizedNumber})`);
+
+  // React with ⏳ to indicate progress
+  try {
+    await sock.sendMessage(chatId, { react: { text: '⏳', key: messageKey } });
+  } catch (e) {
+    console.log(`[ForensicExport] React failed (non-fatal):`, e);
+  }
+
+  // Trigger typing indicator
+  try {
+    await sock.sendPresenceUpdate('composing', chatId);
+  } catch (e) {}
+
+  try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      throw new Error("Supabase client is not initialized.");
+    }
+
+    // 1. Fetch target messages
+    const { data: targetMessages, error: msgError } = await supabase
+      .from('whatsapp_messages')
+      .select('chat_id, chat_name, body, timestamp, is_group, sender_name')
+      .eq('sender_number', normalizedNumber)
+      .order('timestamp', { ascending: false })
+      .limit(300);
+
+    if (msgError) {
+      throw msgError;
+    }
+
+    if (!targetMessages || targetMessages.length === 0) {
+      // Send a polite message saying no records exist for this number
+      const responseText = `⚠️ *لم نجد أي سجلات أو محادثات مرصودة للرقم +${normalizedNumber}* في قاعدة البيانات حالياً.\n\n` +
+        `تأكد من أن الرقم قد تفاعل سابقاً في المجموعات المشتركة التي يراقبها البوت.`;
+      
+      const formatted = markdownToWhatsApp(responseText);
+      let recipientJid = chatId;
+      if (chatId.endsWith('@lid') && senderNumber) {
+        recipientJid = `${senderNumber}@s.whatsapp.net`;
+      }
+      
+      await sock.sendMessage(recipientJid, { text: formatted });
+      try {
+        await sock.sendMessage(chatId, { react: { text: '❌', key: messageKey } });
+      } catch (e) {}
+      return true;
+    }
+
+    // Determine mutual groups and active DMs
+    const uniqueGroups = new Map<string, string>();
+    const uniqueDms = new Set<string>();
+
+    targetMessages.forEach(m => {
+      if (m.is_group) {
+        uniqueGroups.set(m.chat_id, m.chat_name || 'Unknown Group');
+      } else {
+        uniqueDms.add(m.chat_id);
+      }
+    });
+
+    const mutualGroupsCount = uniqueGroups.size;
+    const activeChatIds = Array.from(new Set(targetMessages.map(m => m.chat_id))).slice(0, 5);
+
+    // Fetch conversation streams for top active chats
+    const chatConversations = [];
+    for (const cid of activeChatIds) {
+      const isGrp = cid.endsWith('@g.us');
+      const chatName = uniqueGroups.get(cid) || (isGrp ? 'Unknown Group' : 'DM');
+      
+      const { data: chatMessages, error: chatError } = await supabase
+        .from('whatsapp_messages')
+        .select('sender_number, sender_name, body, timestamp, from_me')
+        .eq('chat_id', cid)
+        .not('body', 'is', null)
+        .order('timestamp', { ascending: false })
+        .limit(50);
+      
+      if (chatMessages && chatMessages.length > 0) {
+        const chronMessages = chatMessages.reverse().map(m => {
+          let role = 'interactor';
+          if (m.sender_number === normalizedNumber) {
+            role = 'target';
+          } else if (m.from_me) {
+            role = 'bot';
+          }
+          return {
+            sender_name: m.sender_name || 'Unknown',
+            sender_number: m.sender_number || 'Unknown',
+            body: m.body,
+            timestamp: new Date(m.timestamp * 1000).toISOString(),
+            role
+          };
+        });
+
+        chatConversations.push({
+          chat_id: cid,
+          chat_name: chatName,
+          is_group: isGrp,
+          messages: chronMessages
+        });
+      }
+    }
+
+    // Extract active friends/interactors
+    const friendCounts: Record<string, { name: string; count: number; chats: Set<string> }> = {};
+    for (const chat of chatConversations) {
+      for (const msg of chat.messages) {
+        if (msg.sender_number !== normalizedNumber && msg.sender_number !== 'bot' && msg.sender_number !== 'Unknown' && msg.role !== 'bot') {
+          if (!friendCounts[msg.sender_number]) {
+            friendCounts[msg.sender_number] = {
+              name: msg.sender_name || 'Unknown',
+              count: 0,
+              chats: new Set()
+            };
+          }
+          friendCounts[msg.sender_number].count++;
+          friendCounts[msg.sender_number].chats.add(chat.chat_name);
+        }
+      }
+    }
+
+    const friendsList = Object.entries(friendCounts)
+      .map(([num, data]) => ({
+        phone: `+${num}`,
+        name: data.name,
+        shared_chats: Array.from(data.chats),
+        interaction_score: data.count
+      }))
+      .sort((a, b) => b.interaction_score - a.interaction_score)
+      .slice(0, 15);
+
+    // Get most active group name
+    const groupCounts: Record<string, number> = {};
+    targetMessages.forEach(m => {
+      if (m.is_group && m.chat_name) {
+        groupCounts[m.chat_name] = (groupCounts[m.chat_name] || 0) + 1;
+      }
+    });
+    const topActiveGroup = Object.entries(groupCounts)
+      .sort((a, b) => b[1] - a[1])[0]?.[0] || 'لا يوجد';
+
+    // Compile JSON payload
+    const exportPayload = {
+      target: {
+        phone: `+${normalizedNumber}`,
+        normalized: normalizedNumber,
+        name: targetMessages[0]?.sender_name || 'غير معروف'
+      },
+      extraction_metadata: {
+        generated_at: new Date().toISOString(),
+        total_mutual_groups_found: mutualGroupsCount,
+        total_logged_messages: targetMessages.length,
+        total_interactors_found: friendsList.length,
+        top_active_group: topActiveGroup
+      },
+      groups: Array.from(uniqueGroups.entries()).map(([cid, name]) => ({
+        chat_id: cid,
+        chat_name: name
+      })),
+      friends: friendsList,
+      chats: chatConversations
+    };
+
+    // Send the JSON as a document
+    const jsonBuffer = Buffer.from(JSON.stringify(exportPayload, null, 2), 'utf-8');
+    const timeString = new Date().toLocaleString('ar-EG', { timeZone: 'Africa/Cairo', hour12: true });
+
+    const captionText = `📊 *التقرير الجنائي المتكامل للتحليل والتصدير* 📊\n\n` +
+      `👤 *المستهدف:* +${normalizedNumber} (${exportPayload.target.name})\n` +
+      `📅 *تاريخ التصدير:* ${timeString}\n` +
+      `🗂️ *الملف المرفق:* \`whatsapp_forensic_export_${normalizedNumber}.json\`\n\n` +
+      `*🔍 ملخص التحليل الاستخباراتي:*\n` +
+      `• *عدد المجموعات المرصود فيها:* ${mutualGroupsCount} 👥\n` +
+      `• *إجمالي الرسائل المرصودة للمستهدف:* ${targetMessages.length} 💬\n` +
+      `• *عدد الأصدقاء المتفاعلين المرصودين:* ${friendsList.length} 👤\n` +
+      `• *أكثر المجموعات نشاطاً:* ${topActiveGroup}\n\n` +
+      `*👥 قائمة أبرز الأصدقاء المتفاعلين:* \n` +
+      (friendsList.length > 0 
+        ? friendsList.slice(0, 5).map((f, i) => `  ${i+1}. *${f.name}* (${f.phone}) - تفاعل: ${f.interaction_score} رسالة`).join('\n')
+        : `  • لا يوجد تفاعل مسجل مع مستخدمين آخرين بالدردشة.`) + `\n\n` +
+      `💬 يحتوي ملف الـ *JSON* المرفق على السجل الكامل للمجموعات والدردشات مع جدول زمني دقيق للمحادثات لقراءتها بالتفصيل.`;
+
+    const formattedCaption = markdownToWhatsApp(captionText);
+
+    let recipientJid = chatId;
+    if (chatId.endsWith('@lid') && senderNumber) {
+      recipientJid = `${senderNumber}@s.whatsapp.net`;
+    }
+
+    await sock.sendMessage(recipientJid, {
+      document: jsonBuffer,
+      fileName: `whatsapp_forensic_export_${normalizedNumber}.json`,
+      mimetype: 'application/json',
+      caption: formattedCaption
+    });
+
+    // React with ✅ to show success
+    try {
+      await sock.sendMessage(chatId, { react: { text: '✅', key: messageKey } });
+    } catch (e) {}
+
+    // Log this action
+    await logOutgoingMessage(chatId, `[Forensic Export Sent for +${normalizedNumber}]`, messageKey.id || undefined);
+
+    return true;
+  } catch (error) {
+    console.error(`[ForensicExport] Error generating export for ${normalizedNumber}:`, error);
+
+    // Send a polite error message
+    const errorText = `❌ عذراً، واجهت خطأ أثناء تصدير المحادثات الجنائية للرقم. يرجى المحاولة مرة أخرى لاحقاً.`;
+    const formatted = markdownToWhatsApp(errorText);
+    
+    let recipientJid = chatId;
+    if (chatId.endsWith('@lid') && senderNumber) {
+      recipientJid = `${senderNumber}@s.whatsapp.net`;
+    }
+    
+    await sock.sendMessage(recipientJid, { text: formatted });
+
+    // React with ❌ to show failure
+    try {
+      await sock.sendMessage(chatId, { react: { text: '❌', key: messageKey } });
+    } catch (e) {}
+
+    return true;
+  } finally {
+    // Clear typing indicator
+    try {
+      await sock.sendPresenceUpdate('paused', chatId);
+    } catch (e) {}
+  }
+}
+
