@@ -2,9 +2,9 @@ import { LOGAN_SYSTEM_PROMPT, LOGAN_FREE_CHAT_PROMPT } from '../prompts/logan';
 
 // Groq API (Primary)
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL_PRIMARY = 'openai/gpt-oss-120b';
-const GROQ_MODEL_FALLBACK = 'openai/gpt-oss-20b';
-const GROQ_MODEL_LARGE_CTX = 'llama-3.3-70b-versatile'; // Higher TPM limit - use when others hit 413
+const GROQ_MODEL_PRIMARY = 'llama-3.3-70b-versatile'; // Primary, extremely powerful LLaMA 3.3 70B
+const GROQ_MODEL_FALLBACK = 'llama-3.1-8b-instant'; // Fallback, extremely fast LLaMA 3.1 8B
+const GROQ_MODEL_LARGE_CTX = 'mixtral-8x7b-32768'; // High context fallback Mixtral 8x7B
 
 // Rough token estimation: ~4 chars per token
 function estimateTokens(text: string): number {
