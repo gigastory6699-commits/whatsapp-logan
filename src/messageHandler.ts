@@ -1,7 +1,7 @@
 import { WASocket, proto, downloadMediaMessage } from '@whiskeysockets/baileys';
 import { WhatsAppMessage } from './types';
 import { ALLOWED_GROUP_IDS, ALLOWED_GROUPS, CONTENT_MESSAGE_TYPES } from './config';
-import { saveMessage, getConversationHistory, isBotPaused, setBotPaused, clearConversationHistory } from './supabase';
+import { saveMessage, getConversationHistory, isBotPaused, setBotPaused, clearConversationHistory, getBotPersonality, setBotPersonality } from './supabase';
 import { isBotMentioned, isReplyToBot, sendMentionWebhook, logMentionWebhookConfig } from './mentionWebhook';
 import { getBotJid, getBotLid } from './connection';
 import { checkForSpam, handleSpamMessage, isSpamDetectionEnabled } from './spamDetector';
@@ -647,6 +647,56 @@ export function setupMessageHandler(sock: WASocket): void {
             });
             continue;
           }
+
+          if (cmd === '/personality' || cmd === '/شخصية') {
+            const parts = bodyText!.trim().split(/\s+/);
+            const arg = parts[1]?.toLowerCase();
+            
+            if (!arg) {
+              const currentP = await getBotPersonality();
+              const usageText = `*⚙️ لوحة التحكم في شخصيات الذكاء الاصطناعي ⚙️*
+              
+*الشخصية النشطة حالياً:* ${currentP === 'superhero' ? '🦸‍♂️ بطل خارق (الافتراضي)' : currentP === 'philosopher' ? '📜 فيلسوف حكيم' : currentP === 'developer' ? '💻 مبرمج محترف' : currentP === 'sarcastic' ? '😂 ساخر كوميدي' : '💼 جاد وصارم'}
+
+👉 لتغيير شخصية البوت، استخدم الأمر متبوعاً بالاسم:
+• \`/personality superhero\` (أو \`/شخصية بطل\`) - البطل الخارق (الافتراضي)
+• \`/personality philosopher\` (أو \`/شخصية فيلسوف\`) - الفيلسوف الحكيم
+• \`/personality developer\` (أو \`/شخصية مبرمج\`) - المبرمج المحترف
+• \`/personality sarcastic\` (أو \`/شخصية ساخر\`) - الكوميدي الساخر
+• \`/personality serious\` (أو \`/شخصية جاد\`) - الصارم والجاد`;
+              
+              await sock.sendMessage(chatId, { text: usageText });
+              continue;
+            }
+            
+            let selected = 'superhero';
+            let replyMsg = '';
+            
+            if (arg === 'philosopher' || arg === 'فيلسوف' || arg === 'حكيم') {
+              selected = 'philosopher';
+              replyMsg = `*📜 تم تفعيل وضع [الفيلسوف الحكيم] بنجاح!* \n\n"من عرف نفسه عرف الكون. سأجيبك الآن بكل حكمة وتأمل، متدبراً عمق معانيك الروحية والأدبية..."`;
+            } else if (arg === 'developer' || arg === 'مبرمج' || arg === 'تقني' || arg === 'كود') {
+              selected = 'developer';
+              replyMsg = `*💻 تم تفعيل وضع [المبرمج المحترف] بنجاح!* \n\n"System initialized. Output format: structured, optimized, and ready for production. Let's analyze algorithms, spot bugs, and write clean code..."`;
+            } else if (arg === 'sarcastic' || arg === 'ساخر' || arg === 'كوميدي' || arg === 'مزاح') {
+              selected = 'sarcastic';
+              replyMsg = `*😂 تم تفعيل وضع [الساخر الكوميدي] بنجاح!* \n\n"يا هلا يا هلا! أخيراً وضع المتعة تفعل! جهز نفسك لقصف الجبهات اللذيذ والردود الفرفوشة... أرجوك لا تزعل من قفشاتي الحادة!"`;
+            } else if (arg === 'serious' || arg === 'جاد' || arg === 'صارم' || arg === 'رسمي') {
+              selected = 'serious';
+              replyMsg = `*💼 تم تفعيل وضع [الجاد والصارم] بنجاح.* \n\nتم تقييد الرموز التعبيرية والمزاح. الردود من الآن ستكون مباشرة، علمية، رسمية، ومبنية على الحقائق فقط بشكل احترافي صارم.`;
+            } else {
+              selected = 'superhero';
+              replyMsg = `*🦸‍♂️ تم تفعيل وضع [البطل الخارق] بنجاح (الوضع الافتراضي).* \n\nسأجيبك بكل ثقة مطلقة وكاريزمية وقوة خارقة لمساعدتك في أي تحليل أو أتمتة رقمية!`;
+            }
+            
+            await setBotPersonality(selected);
+            try {
+              await sock.sendMessage(chatId, { react: { text: '🧠', key: message.key } });
+            } catch (e) {}
+            
+            await sock.sendMessage(chatId, { text: replyMsg });
+            continue;
+          }
           
           if (cmd === '/skills') {
             try {
@@ -691,10 +741,11 @@ export function setupMessageHandler(sock: WASocket): void {
     💡 *أمر التفعيل:* أرسل \`/تصدير <رقم الهاتف>\` أو \`/export <رقم الهاتف>\`.
 
 11. ⚙️ *التحكم الذاتي للبوت (Self Control):*
-    • */stop* - إيقاف البوت مؤقتاً.
-    • */start* - تفعيل البوت وتشغيله.
-    • */new* - بدء محادثة جديدة ومسح الذاكرة لهذا الشات.
-    • */skills* - عرض قائمة المهارات هذه.`;
+     • */stop* - إيقاف البوت مؤقتاً.
+     • */start* - تفعيل البوت وتشغيله.
+     • */new* - بدء محادثة جديدة ومسح الذاكرة لهذا الشات.
+     • */personality <الشخصية>* (أو */شخصية*) - لتغيير سلوك وطبيعة ذكاء البوت ديناميكياً لـ (بطل، فيلسوف، مبرمج، ساخر، جاد).
+     • */skills* - عرض قائمة المهارات هذه.`;
 
             await sock.sendMessage(chatId, { text: skillsText });
             continue;

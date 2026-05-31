@@ -409,3 +409,39 @@ export async function clearConversationHistory(chatId: string): Promise<boolean>
   }
 }
 
+/**
+ * Get active bot personality
+ */
+export async function getBotPersonality(): Promise<string> {
+  if (!supabase) return 'superhero';
+  try {
+    const { data, error } = await supabase
+      .from('whatsapp_auth_state')
+      .select('value')
+      .eq('key', 'bot_personality')
+      .single();
+    if (error || !data) return 'superhero';
+    return JSON.parse(data.value) || 'superhero';
+  } catch (err) {
+    return 'superhero';
+  }
+}
+
+/**
+ * Set active bot personality
+ */
+export async function setBotPersonality(personality: string): Promise<void> {
+  if (!supabase) return;
+  try {
+    await supabase
+      .from('whatsapp_auth_state')
+      .upsert({
+        key: 'bot_personality',
+        value: JSON.stringify(personality),
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'key' });
+  } catch (err) {
+    console.error('[Supabase] Error setting bot personality:', err);
+  }
+}
+

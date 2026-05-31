@@ -1,4 +1,5 @@
 import { LOGAN_SYSTEM_PROMPT, LOGAN_FREE_CHAT_PROMPT } from '../prompts/logan';
+import { getBotPersonality } from '../supabase';
 
 // Groq API (Primary)
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
@@ -162,7 +163,21 @@ export async function callGroq(userPrompt: string, useFreeChatPrompt: boolean = 
   console.log(`[LOGAN] globalFreeChatMode = ${globalFreeChatMode}, useFreeChatPrompt param = ${useFreeChatPrompt}`);
   console.log(`[LOGAN] FINAL: shouldUseFreeChatPrompt = ${shouldUseFreeChatPrompt}`);
 
-  const systemPrompt = shouldUseFreeChatPrompt ? LOGAN_FREE_CHAT_PROMPT : LOGAN_SYSTEM_PROMPT;
+  let systemPrompt = shouldUseFreeChatPrompt ? LOGAN_FREE_CHAT_PROMPT : LOGAN_SYSTEM_PROMPT;
+
+  // Retrieve active personality from Database
+  const activePersonality = await getBotPersonality();
+  console.log(`[LOGAN] Loaded active AI personality: ${activePersonality}`);
+
+  if (activePersonality === 'philosopher') {
+    systemPrompt += `\n\n[PERSONALITY MODE: Wise Philosopher (فيلسوف حكيم)]\n- Respond in elegant classical Arabic (اللغة العربية الفصحى الفاخرة).\n- Incorporate deep philosophical reflections, poetry, and wisdom.\n- Be thoughtful, calm, poetic, and analytical. Use philosophical metaphors.`;
+  } else if (activePersonality === 'developer') {
+    systemPrompt += `\n\n[PERSONALITY MODE: Senior Developer (مبرمج محترف)]\n- Speak like an elite software engineer and systems architect.\n- Reference coding patterns, performance metrics, memory optimization, and clean code.\n- Use technical jargon, programming metaphors, and joke about bugs and compilers.`;
+  } else if (activePersonality === 'sarcastic') {
+    systemPrompt += `\n\n[PERSONALITY MODE: Witty & Sarcastic (ساخر كوميدي)]\n- Respond with witty humor, friendly sarcasm, and funny lighthearted roasts.\n- Never be boring or robotic. Write fun, punchy, conversational replies full of smart jokes.\n- Feel free to mock questions sarcastically but keep it light and extremely engaging.`;
+  } else if (activePersonality === 'serious') {
+    systemPrompt += `\n\n[PERSONALITY MODE: Serious & Formal (جاد ومحقق)]\n- Speak like an authoritative executive, detective, or formal scientist.\n- Use highly formal, direct, and precise language. Avoid emojis completely.\n- Be objective, brief, factual, and strictly professional.`;
+  }
 
   // Log which prompt is being used with clear indication
   if (shouldUseFreeChatPrompt) {
