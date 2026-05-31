@@ -49,7 +49,7 @@ async function callClaudeWithPrompt(
         model: CLAUDE_MODEL,
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
-        max_tokens: 800
+        max_tokens: 2000
       })
     });
 
@@ -94,7 +94,7 @@ async function callGroqWithModel(
       body: JSON.stringify({
         model,
         messages,
-        max_tokens: 800
+        max_tokens: 2000
       })
     });
 
