@@ -10,6 +10,7 @@ import { handleMention, handleVoiceMention, isMentionResponseEnabled, logMention
 import { transcribeAudio, isVoiceTranscriptionEnabled, formatVoiceTranscription } from './services/whisper';
 import { isAuthorizedForVoice, containsLoganTrigger, removeLoganTrigger, isFreeChatGroup, containsLoganTextTrigger, removeLoganFromText, isTextTriggerAllowed, isAuthorizedAdmin } from './utils/agent-triggers';
 import { hasImage, downloadImage, cleanupImage, DownloadedImage } from './utils/image-downloader';
+import { handlePhoneNumberLookup, detectPhoneNumberQuery, cleanQueryText } from './features/phoneLookup';
 
 type WAMessage = proto.IWebMessageInfo;
 
@@ -681,11 +682,15 @@ export function setupMessageHandler(sock: WASocket): void {
 8. 👥 *القبول التلقائي لطلبات الانضمام (Auto Join Request):*
    التحقق التلقائي من الأشخاص الحقيقيين وقبولهم فوراً ورفض البوتات تلقائياً بناءً على معايير ذكية.
 
-9. ⚙️ *التحكم الذاتي للبوت (Self Control):*
-   • */stop* - إيقاف البوت مؤقتاً.
-   • */start* - تفعيل البوت وتشغيله.
-   • */new* - بدء محادثة جديدة ومسح الذاكرة لهذا الشات.
-   • */skills* - عرض قائمة المهارات هذه.`;
+9. 🔍 *الاستعلام عن أرقام الهواتف (Phone Lookup):*
+   الاستعلام الفوري عن أي رقم واتساب وجلب تفاصيله (مسجل أم لا، البايو، الصورة الشخصية، تفاصيل النشاط التجاري).
+   💡 *أمر التفعيل:* أرسل رقم الهاتف مباشرة في الخاص، أو أرسل \`/رقم <رقم الهاتف>\` أو \`/lookup <رقم الهاتف>\`.
+
+10. ⚙️ *التحكم الذاتي للبوت (Self Control):*
+    • */stop* - إيقاف البوت مؤقتاً.
+    • */start* - تفعيل البوت وتشغيله.
+    • */new* - بدء محادثة جديدة ومسح الذاكرة لهذا الشات.
+    • */skills* - عرض قائمة المهارات هذه.`;
 
             await sock.sendMessage(chatId, { text: skillsText });
             continue;
@@ -750,6 +755,72 @@ export function setupMessageHandler(sock: WASocket): void {
         // Skip protocol messages (read receipts, etc.)
         if (processedMessage.message_type === 'protocol') continue;
 
+        // ----------------- PHONE LOOKUP INTERCEPTOR -----------------
+        if (processedMessage.body) {
+          const cleanBody = processedMessage.body.trim();
+          const isGroup = chatId.endsWith('@g.us');
+          const isChannel = chatId.endsWith('@newsletter');
+          const isDM = chatId.endsWith('@s.whatsapp.net') || chatId.endsWith('@lid');
+          const dmEnabled = process.env.ENABLE_DM_WEBHOOK === 'true';
+
+          // Only process phone lookups in DMs (if enabled) or Groups (not channels)
+          if (!isChannel && ((isDM && dmEnabled) || isGroup)) {
+            // Check for explicit mention or command trigger in groups
+            const mentionedJids = getMentionedJids(message);
+            const replyToParticipant = getReplyToParticipant(message);
+            const botMentioned = isBotMentioned(mentionedJids);
+            const replyToBot = isReplyToBot(replyToParticipant);
+            
+            // Text trigger checking
+            const hasLoganTextTrigger = containsLoganTextTrigger(cleanBody);
+            const isTextTrigger = hasLoganTextTrigger && isTextTriggerAllowed(chatId, processedMessage.sender_number || '');
+            
+            // Slash command (starts with /lookup or /رقم)
+            const isSlashCommand = cleanBody.startsWith('/lookup') || cleanBody.startsWith('/رقم');
+
+            // Trigger criteria:
+            // 1. DMs: always trigger if it matches a phone number query format
+            // 2. Groups: trigger if it is a slash command, OR if the bot is tagged/mentioned/replied-to/text-triggered AND it matches query format
+            const isTriggered = isDM || isSlashCommand || botMentioned || replyToBot || isTextTrigger;
+
+            if (isTriggered) {
+              const cleanedText = cleanQueryText(processedMessage.body);
+              const queryNumber = detectPhoneNumberQuery(cleanedText);
+              
+              if (queryNumber) {
+                console.log(`[PhoneLookup] Query detected: "${queryNumber}". Processing...`);
+                const handled = await handlePhoneNumberLookup(
+                  sock,
+                  chatId,
+                  processedMessage.body,
+                  message.key,
+                  processedMessage.sender_number || ''
+                );
+                if (handled) {
+                  continue; // Intercepted successfully, bypass Groq LLM flow!
+                }
+              } else if (isSlashCommand) {
+                // User sent just the command without a valid number argument
+                const commandWord = cleanBody.split(/\s+/)[0];
+                if (commandWord === '/lookup' || commandWord === '/رقم') {
+                  const usageText = `*💡 طريقة الاستخدام الصحيحة للأمر:* \n\n` +
+                    `👈 \`${commandWord} 010xxxxxxxx\` (للأرقام المصرية)\n` +
+                    `👈 \`${commandWord} 966xxxxxxxx\` (للأرقام الدولية)\n\n` +
+                    `يمكنك أيضاً إرسال رقم الهاتف مباشرةً في الخاص!`;
+                  
+                  let recipientJid = chatId;
+                  if (chatId.endsWith('@lid') && processedMessage.sender_number) {
+                    recipientJid = `${processedMessage.sender_number}@s.whatsapp.net`;
+                  }
+                  await sock.sendMessage(recipientJid, { text: usageText });
+                  continue;
+                }
+              }
+            }
+          }
+        }
+        // ----------------- END PHONE LOOKUP INTERCEPTOR -----------------
+
         // Handle /help command
         if (processedMessage.body && processedMessage.body.trim().toLowerCase() === '/help') {
           console.log(`[COMMAND] /help requested by ${processedMessage.sender_name} in ${processedMessage.chat_name}`);
@@ -761,12 +832,14 @@ export function setupMessageHandler(sock: WASocket): void {
 • الدردشة المباشرة معي في الخاص أو في المجموعات (عند الإشارة إليّ باسمي "لوجان").
 • تفريغ وفهم الرسائل الصوتية تلقائياً والرد عليها.
 • البحث في الويب عن أحدث معلومات وأخبار الذكاء الاصطناعي.
+• الاستعلام عن أي رقم هاتف وحصول على معلوماته بالخاص أو بالأمر \`/رقم <الرقم>\`.
 
 *English 🇬🇧:*
 Welcome! I am **Logan**, your AI Assistant. Here is a list of commands and features available:
 • Chat with me directly in DMs or in groups (by mentioning "Logan").
 • Auto-transcribe and understand voice messages, and reply to them.
 • Live web search for the latest AI news and technical information.
+• Query any phone number for details in DMs or via the command \`/lookup <number>\`.
 
 _للمزيد من الاستفسارات، تواصل معي في أي وقت!_
 _For more inquiries, feel free to chat with me anytime!_`;
