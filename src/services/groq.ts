@@ -72,7 +72,7 @@ async function callClaudeWithPrompt(
         system: systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
         max_tokens: 2000,
-        temperature: 0.9
+        temperature: 0.75
       })
     });
 
@@ -118,7 +118,7 @@ async function callGroqWithModel(
         model,
         messages,
         max_tokens: 2000,
-        temperature: 0.9,
+        temperature: 0.75,
         top_p: 0.95
       })
     });
