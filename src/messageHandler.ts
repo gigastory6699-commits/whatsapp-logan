@@ -10,7 +10,7 @@ import { handleMention, handleVoiceMention, isMentionResponseEnabled, logMention
 import { transcribeAudio, isVoiceTranscriptionEnabled, formatVoiceTranscription } from './services/whisper';
 import { isAuthorizedForVoice, containsLoganTrigger, removeLoganTrigger, isFreeChatGroup, containsLoganTextTrigger, removeLoganFromText, isTextTriggerAllowed, isAuthorizedAdmin } from './utils/agent-triggers';
 import { hasImage, downloadImage, cleanupImage, DownloadedImage } from './utils/image-downloader';
-import { handlePhoneNumberLookup, detectPhoneNumberQuery, cleanQueryText, handleForensicExport, detectExportQuery } from './features/phoneLookup';
+import { handlePhoneNumberLookup, detectPhoneNumberQuery, cleanQueryText, handleForensicExport, detectExportQuery, handleForensicGraph, detectGraphQuery } from './features/phoneLookup';
 
 type WAMessage = proto.IWebMessageInfo;
 

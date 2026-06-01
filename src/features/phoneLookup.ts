@@ -668,3 +668,388 @@ export async function handleForensicExport(
   }
 }
 
+/**
+ * Detect if the message body represents a graph network query.
+ * Returns the matched phone number or null if not a query.
+ */
+export function detectGraphQuery(body: string): string | null {
+  if (!body) return null;
+  
+  const trimmed = body.trim();
+  
+  const prefixes = [
+    /^\/graph\s+(.+)$/i,
+    /^\/مخطط\s+(.+)$/,
+    /^مخطط\s+علاقات\s+(.+)$/i,
+    /^مخطط\s+العلاقات\s+(.+)$/i,
+    /^رسم\s+شبكة\s+(.+)$/i,
+    /^شبكة\s+علاقات\s+(.+)$/i
+  ];
+  
+  for (const prefix of prefixes) {
+    const match = trimmed.match(prefix);
+    if (match && match[1]) {
+      const cleaned = match[1].replace(/[\s\-()\[\]]/g, '');
+      if (/^\+?\d{9,15}$/.test(cleaned)) {
+        return cleaned;
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Main entry handler for executing the relationship mapping
+ */
+export async function handleForensicGraph(
+  sock: WASocket,
+  chatId: string,
+  messageBody: string,
+  messageKey: proto.IMessageKey,
+  senderNumber: string
+): Promise<boolean> {
+  const cleanedText = cleanQueryText(messageBody);
+  const queryNumber = detectGraphQuery(cleanedText);
+  if (!queryNumber) {
+    return false;
+  }
+
+  const normalizedNumber = normalizePhoneNumber(queryNumber);
+  console.log(`[ForensicGraph] Intercepted graph request for: ${queryNumber} (normalized: ${normalizedNumber})`);
+
+  // React with ⏳ to indicate progress
+  try {
+    await sock.sendMessage(chatId, { react: { text: '⏳', key: messageKey } });
+  } catch (e) {
+    console.log(`[ForensicGraph] React failed (non-fatal):`, e);
+  }
+
+  // Trigger typing indicator
+  try {
+    await sock.sendPresenceUpdate('composing', chatId);
+  } catch (e) {}
+
+  try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      throw new Error("Supabase client is not initialized.");
+    }
+
+    // 1. Fetch target messages
+    const { data: targetMessages, error: msgError } = await supabase
+      .from('whatsapp_messages')
+      .select('chat_id, chat_name, body, timestamp, is_group, sender_name')
+      .eq('sender_number', normalizedNumber)
+      .order('timestamp', { ascending: false })
+      .limit(300);
+
+    if (msgError) {
+      throw msgError;
+    }
+
+    if (!targetMessages || targetMessages.length === 0) {
+      // Send a polite message saying no records exist for this number
+      const responseText = `⚠️ *لم نجد أي سجلات أو محادثات مرصودة للرقم +${normalizedNumber}* في قاعدة البيانات حالياً لإنشاء مخطط شبكي.\n\n` +
+        `تأكد من أن الرقم قد تفاعل سابقاً في المجموعات المشتركة التي يراقبها البوت.`;
+      
+      const formatted = markdownToWhatsApp(responseText);
+      let recipientJid = chatId;
+      if (chatId.endsWith('@lid') && senderNumber) {
+        recipientJid = `${senderNumber}@s.whatsapp.net`;
+      }
+      
+      await sock.sendMessage(recipientJid, { text: formatted });
+      try {
+        await sock.sendMessage(chatId, { react: { text: '❌', key: messageKey } });
+      } catch (e) {}
+      return true;
+    }
+
+    // Determine mutual groups
+    const uniqueGroups = new Map<string, string>();
+    targetMessages.forEach(m => {
+      if (m.is_group) {
+        uniqueGroups.set(m.chat_id, m.chat_name || 'Unknown Group');
+      }
+    });
+
+    const activeChatIds = Array.from(new Set(targetMessages.map(m => m.chat_id))).slice(0, 5);
+
+    // Fetch conversation streams for top active chats
+    const chatConversations = [];
+    for (const cid of activeChatIds) {
+      const isGrp = cid.endsWith('@g.us');
+      const chatName = uniqueGroups.get(cid) || (isGrp ? 'Unknown Group' : 'DM');
+      
+      const { data: chatMessages, error: chatError } = await supabase
+        .from('whatsapp_messages')
+        .select('sender_number, sender_name, body, timestamp, from_me')
+        .eq('chat_id', cid)
+        .not('body', 'is', null)
+        .order('timestamp', { ascending: false })
+        .limit(50);
+      
+      if (chatMessages && chatMessages.length > 0) {
+        const chronMessages = chatMessages.reverse().map(m => {
+          let role = 'interactor';
+          if (m.sender_number === normalizedNumber) {
+            role = 'target';
+          } else if (m.from_me) {
+            role = 'bot';
+          }
+          return {
+            sender_name: m.sender_name || 'Unknown',
+            sender_number: m.sender_number || 'Unknown',
+            body: m.body,
+            timestamp: new Date(m.timestamp * 1000).toISOString(),
+            role
+          };
+        });
+
+        chatConversations.push({
+          chat_id: cid,
+          chat_name: chatName,
+          is_group: isGrp,
+          messages: chronMessages
+        });
+      }
+    }
+
+    // Extract active friends/interactors
+    const friendCounts: Record<string, { name: string; count: number; chats: Set<string> }> = {};
+    for (const chat of chatConversations) {
+      for (const msg of chat.messages) {
+        if (msg.sender_number !== normalizedNumber && msg.sender_number !== 'bot' && msg.sender_number !== 'Unknown' && msg.role !== 'bot') {
+          if (!friendCounts[msg.sender_number]) {
+            friendCounts[msg.sender_number] = {
+              name: msg.sender_name || 'Unknown',
+              count: 0,
+              chats: new Set()
+            };
+          }
+          friendCounts[msg.sender_number].count++;
+          friendCounts[msg.sender_number].chats.add(chat.chat_name);
+        }
+      }
+    }
+
+    const friendsList = Object.entries(friendCounts)
+      .map(([num, data]) => ({
+        phone: `+${num}`,
+        name: data.name,
+        shared_chats: Array.from(data.chats),
+        interaction_score: data.count
+      }))
+      .sort((a, b) => b.interaction_score - a.interaction_score)
+      .slice(0, 8); // Top 8 friends for clean circle
+
+    // Generate stunning SVG
+    const targetName = targetMessages[0]?.sender_name || 'Target';
+    const totalMessages = targetMessages.length;
+    const timeString = new Date().toLocaleString('ar-EG', { timeZone: 'Africa/Cairo', hour12: true });
+
+    let svgLines = '';
+    let svgNodes = '';
+    const centerX = 400;
+    const centerY = 300;
+    const radius = 180;
+    const totalFriends = friendsList.length;
+
+    // Draw grid circle indicators
+    let gridCircles = `<circle cx="${centerX}" cy="${centerY}" r="90" fill="none" stroke="#1e293b" stroke-width="1" stroke-dasharray="4" opacity="0.4"/>
+    <circle cx="${centerX}" cy="${centerY}" r="${radius}" fill="none" stroke="#1e293b" stroke-width="1" stroke-dasharray="4" opacity="0.4"/>`;
+
+    friendsList.forEach((friend, index) => {
+      const theta = (2 * Math.PI * index) / totalFriends;
+      const fx = Math.round(centerX + radius * Math.cos(theta));
+      const fy = Math.round(centerY + radius * Math.sin(theta));
+
+      // Calculate connection strength indicators
+      const maxScore = Math.max(...friendsList.map(f => f.interaction_score), 1);
+      const intensity = friend.interaction_score / maxScore;
+      const lineWidth = Math.max(Math.round(intensity * 10), 2);
+      const lineOpacity = Math.max(intensity, 0.4);
+
+      // Cyber glowing lines linking target to friends
+      svgLines += `
+      <!-- Connection to ${friend.name} -->
+      <line x1="${centerX}" y1="${centerY}" x2="${fx}" y2="${fy}" stroke="#0ea5e9" stroke-width="${lineWidth}" opacity="${lineOpacity}" filter="url(#glow)"/>
+      <line x1="${centerX}" y1="${centerY}" x2="${fx}" y2="${fy}" stroke="#38bdf8" stroke-width="1" opacity="0.9"/>
+      `;
+
+      // Draw friend orbiting nodes
+      svgNodes += `
+      <!-- Friend Node: ${friend.name} -->
+      <g transform="translate(${fx}, ${fy})">
+        <circle cx="0" cy="0" r="32" fill="#09090b" stroke="#06b6d4" stroke-width="2" filter="url(#glow)"/>
+        <circle cx="0" cy="0" r="28" fill="#18181b" stroke="#14b8a6" stroke-width="1"/>
+        <text x="0" y="-4" fill="#f8fafc" font-family="Segoe UI, sans-serif" font-size="11" font-weight="bold" text-anchor="middle">${friend.name.substring(0, 10)}</text>
+        <text x="0" y="12" fill="#0ea5e9" font-family="Segoe UI, sans-serif" font-size="9" text-anchor="middle">${friend.phone}</text>
+        <text x="0" y="22" fill="#14b8a6" font-family="Segoe UI, sans-serif" font-size="8" font-weight="bold" text-anchor="middle">وزن: ${friend.interaction_score}</text>
+      </g>
+      `;
+    });
+
+    // Main Target Node (Center)
+    const targetNode = `
+    <!-- Center Target Node -->
+    <g transform="translate(${centerX}, ${centerY})">
+      <circle cx="0" cy="0" r="48" fill="#0369a1" stroke="#38bdf8" stroke-width="3" filter="url(#glow-strong)"/>
+      <circle cx="0" cy="0" r="42" fill="#0284c7" stroke="#0ea5e9" stroke-width="1" stroke-dasharray="2"/>
+      <text x="0" y="-8" fill="#ffffff" font-family="Segoe UI, sans-serif" font-size="14" font-weight="bold" text-anchor="middle">${targetName}</text>
+      <text x="0" y="10" fill="#93c5fd" font-family="Segoe UI, sans-serif" font-size="10" text-anchor="middle">+${normalizedNumber}</text>
+      <text x="0" y="24" fill="#38bdf8" font-family="Segoe UI, sans-serif" font-size="8" font-weight="bold" text-anchor="middle">الهدف (TARGET)</text>
+    </g>
+    `;
+
+    // SVG Header, statistics, and watermark
+    const svgHeader = `
+    <!-- Header -->
+    <text x="40" y="60" fill="#ffffff" font-family="Segoe UI, sans-serif" font-size="22" font-weight="bold" filter="url(#glow)">MAPPED RELATIONSHIP NETWORK</text>
+    <text x="40" y="85" fill="#38bdf8" font-family="Segoe UI, sans-serif" font-size="12" font-weight="bold">مخطط شبكة العلاقات الاستخباراتية الثنائية</text>
+    <line x1="40" y1="100" x2="760" y2="100" stroke="#1e293b" stroke-width="1"/>
+    
+    <!-- Info Panel Left -->
+    <rect x="40" y="470" width="220" height="90" rx="6" fill="#09090b" stroke="#1e293b" stroke-width="1" opacity="0.8"/>
+    <text x="55" y="492" fill="#94a3b8" font-family="Segoe UI, sans-serif" font-size="10">إجمالي الرسائل المرصودة:</text>
+    <text x="240" y="492" fill="#06b6d4" font-family="Segoe UI, sans-serif" font-size="11" font-weight="bold" text-anchor="end">${totalMessages} رسالة</text>
+    <text x="55" y="515" fill="#94a3b8" font-family="Segoe UI, sans-serif" font-size="10">المجموعات المرصودة:</text>
+    <text x="240" y="515" fill="#06b6d4" font-family="Segoe UI, sans-serif" font-size="11" font-weight="bold" text-anchor="end">${uniqueGroups.size} مجموعة</text>
+    <text x="55" y="538" fill="#94a3b8" font-family="Segoe UI, sans-serif" font-size="10">تاريخ توليد المخطط:</text>
+    <text x="240" y="538" fill="#38bdf8" font-family="Segoe UI, sans-serif" font-size="9" text-anchor="end">${timeString.split(' ')[0]}</text>
+
+    <!-- Logo / Watermark Right -->
+    <rect x="580" y="510" width="180" height="50" rx="25" fill="#09090b" stroke="#38bdf8" stroke-width="1" stroke-dasharray="3"/>
+    <text x="670" y="533" fill="#ffffff" font-family="Segoe UI, sans-serif" font-size="11" font-weight="bold" text-anchor="middle">MEDO AI • SUPER HERO</text>
+    <circle cx="605" cy="535" r="8" fill="#38bdf8" filter="url(#glow)"/>
+    <circle cx="605" cy="535" r="4" fill="#ffffff"/>
+    `;
+
+    // Combine all to SVG
+    const svgContent = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+      <!-- Glow Filters -->
+      <defs>
+        <radialGradient id="bg-grad" cx="50%" cy="50%" r="70%">
+          <stop offset="0%" stop-color="#070a13" />
+          <stop offset="100%" stop-color="#020408" />
+        </radialGradient>
+        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="5" result="blur" />
+          <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+        <filter id="glow-strong" x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur stdDeviation="10" result="blur" />
+          <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+      </defs>
+      
+      <!-- Premium radial background -->
+      <rect width="800" height="600" fill="url(#bg-grad)" />
+      
+      <!-- Tech grid lines -->
+      <g stroke="#1e293b" stroke-width="0.5" opacity="0.2">
+        <line x1="0" y1="150" x2="800" y2="150"/>
+        <line x1="0" y1="300" x2="800" y2="300"/>
+        <line x1="0" y1="450" x2="800" y2="450"/>
+        <line x1="200" y1="0" x2="200" y2="600"/>
+        <line x1="400" y1="0" x2="400" y2="600"/>
+        <line x1="600" y1="0" x2="600" y2="600"/>
+      </g>
+      
+      ${gridCircles}
+      ${svgLines}
+      ${svgNodes}
+      ${targetNode}
+      ${svgHeader}
+    </svg>
+    `;
+
+    // 3. Compile ASCII Mind-Map
+    let asciiMap = ``;
+    if (friendsList.length > 0) {
+      asciiMap += `     [ المجموعات المشتركة: ${uniqueGroups.size} ]\n`;
+      asciiMap += `                 │\n`;
+      friendsList.slice(0, 3).forEach((f, idx) => {
+        asciiMap += `        ${idx === 0 ? '┌' : idx === 1 ? '├' : '└'}── 👤 *${f.name}* (${f.phone}) ── وزن: ${f.interaction_score}\n`;
+      });
+      asciiMap += `                 │\n`;
+      asciiMap += `        🎯 *${targetName}* (${normalizedNumber})\n`;
+      asciiMap += `                 │\n`;
+      if (friendsList.length > 3) {
+        friendsList.slice(3, 6).forEach((f, idx) => {
+          asciiMap += `        ${idx === 0 ? '┌' : idx === 1 ? '├' : '└'}── 👤 *${f.name}* (${f.phone}) ── وزن: ${f.interaction_score}\n`;
+        });
+      }
+    } else {
+      asciiMap += `        🎯 *المستهدف:* +${normalizedNumber}\n`;
+      asciiMap += `        (لا توجد شبكة أصدقاء متفاعلة مرصودة حالياً)`;
+    }
+
+    // Beautiful Caption Report
+    const captionText = `🎯 *خريطة شبكة العلاقات الاستخباراتية المتكاملة* 🎯\n\n` +
+      `👤 *المستهدف:* +${normalizedNumber} (${targetName})\n` +
+      `📅 *تاريخ التحليل:* ${timeString}\n` +
+      `🗂️ *الملف المرفق:* مخطط علاقات فكتوريا عالي الدقة (\`forensic_graph_${normalizedNumber}.svg\`)\n\n` +
+      `*📊 الهيكل التفاعلي الشجري (ASCII Mind Map):*\n\`\`\`\n${asciiMap}\n\`\`\`\n\n` +
+      `*🔍 كشف وتحليل الارتباط الشبكي:*\n` +
+      `• *أقوى تفاعل مرصود:* ${friendsList[0] ? `*${friendsList[0].name}* (${friendsList[0].phone})` : 'غير متوفر'}\n` +
+      `• *عدد روابط الأصدقاء النشطة:* ${friendsList.length} روابط متصلة 👥\n` +
+      `• *إجمالي البصمات النصية:* ${totalMessages} رسالة مرصودة بالخلفية 💬\n\n` +
+      `💡 افتح ملف الـ *SVG* المرفق لعرض وتصفح مخطط العلاقات الشبكية المتكامل بتصميم نيون تفاعلي عالي الدقة!`;
+
+    const formattedCaption = markdownToWhatsApp(captionText);
+
+    let recipientJid = chatId;
+    if (chatId.endsWith('@lid') && senderNumber) {
+      recipientJid = `${senderNumber}@s.whatsapp.net`;
+    }
+
+    // Send the SVG file as a document
+    const svgBuffer = Buffer.from(svgContent.trim(), 'utf-8');
+
+    await sock.sendMessage(recipientJid, {
+      document: svgBuffer,
+      fileName: `forensic_graph_${normalizedNumber}.svg`,
+      mimetype: 'image/svg+xml',
+      caption: formattedCaption
+    });
+
+    // React with ✅ to show success
+    try {
+      await sock.sendMessage(chatId, { react: { text: '✅', key: messageKey } });
+    } catch (e) {}
+
+    // Log outgoing message
+    await logOutgoingMessage(chatId, `[Forensic Graph Sent for +${normalizedNumber}]`, messageKey.id || undefined);
+
+    return true;
+  } catch (error) {
+    console.error(`[ForensicGraph] Error generating graph for ${normalizedNumber}:`, error);
+
+    // Send a polite error message
+    const errorText = `❌ عذراً، واجهت خطأ أثناء إنشاء وتصميم خريطة العلاقات للرقم. يرجى المحاولة مرة أخرى لاحقاً.`;
+    const formatted = markdownToWhatsApp(errorText);
+    
+    let recipientJid = chatId;
+    if (chatId.endsWith('@lid') && senderNumber) {
+      recipientJid = `${senderNumber}@s.whatsapp.net`;
+    }
+    
+    await sock.sendMessage(recipientJid, { text: formatted });
+
+    // React with ❌ to show failure
+    try {
+      await sock.sendMessage(chatId, { react: { text: '❌', key: messageKey } });
+    } catch (e) {}
+
+    return true;
+  } finally {
+    // Clear typing indicator
+    try {
+      await sock.sendPresenceUpdate('paused', chatId);
+    } catch (e) {}
+  }
+}
+

@@ -201,9 +201,13 @@ export async function callGroq(userPrompt: string, useFreeChatPrompt: boolean = 
     console.log(`[LOGAN] Prompt was truncated to fit token limit`);
   }
 
+  // Suffix instruction to prevent model from repeating user queries, hallucinating dialog turns,
+  // or using conversation prefixes like "ميدو:" or "Medo AI:".
+  const finalUserPrompt = `${safeUserPrompt}\n\n[REMINDER: Respond ONLY as Medo AI (ميدو). Do NOT include dialogue prefixes like "Medo AI:", "ميدو:", "Assistant:", or "User:". Do NOT repeat the question or generate conversation turns for other users. Reply naturally, directly, and elegantly to the CURRENT MESSAGE above in a structured, model format.]`;
+
   const messages: GroqMessage[] = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: safeUserPrompt }
+    { role: 'user', content: finalUserPrompt }
   ];
 
   // Try Groq first (Primary) - faster and cheaper
