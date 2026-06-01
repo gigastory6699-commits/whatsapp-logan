@@ -3,9 +3,9 @@ import { getBotPersonality } from '../supabase';
 
 // Groq API (Primary)
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL_PRIMARY = 'llama-3.3-70b-versatile'; // Primary, extremely powerful LLaMA 3.3 70B
-const GROQ_MODEL_FALLBACK = 'llama-3.1-8b-instant'; // Fallback, extremely fast LLaMA 3.1 8B
-const GROQ_MODEL_LARGE_CTX = 'gemma2-9b-it'; // Fallback Gemma 2 9B model
+const GROQ_MODEL_PRIMARY = 'openai/gpt-oss-120b'; // Primary, extremely powerful 120B Model
+const GROQ_MODEL_FALLBACK = 'llama-3.3-70b-versatile'; // Fallback, extremely powerful LLaMA 3.3 70B
+const GROQ_MODEL_LARGE_CTX = 'llama-3.1-8b-instant'; // Fast backup fallback LLaMA 3.1 8B
 
 // Rough token estimation: ~4 chars per token
 function estimateTokens(text: string): number {
