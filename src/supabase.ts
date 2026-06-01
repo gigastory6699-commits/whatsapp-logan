@@ -94,6 +94,23 @@ export async function getConversationHistory(
       return [];
     }
 
+    // Auto-reset conversation session after 15 minutes of inactivity (ChatGPT-style)
+    const mostRecentMessage = data[0];
+    const nowInSeconds = Math.floor(Date.now() / 1000);
+    const fifteenMinutesInSeconds = 15 * 60; // 900 seconds
+
+    if (mostRecentMessage && mostRecentMessage.timestamp) {
+      const timeDiff = nowInSeconds - mostRecentMessage.timestamp;
+      if (timeDiff > fifteenMinutesInSeconds) {
+        console.log(`[Supabase] Last message in chat ${groupId} was ${timeDiff} seconds ago (>15 minutes). Auto-clearing session.`);
+        // Run clear history in background to mark older messages as is_content = false
+        clearConversationHistory(groupId).catch(err => {
+          console.error(`[Supabase] Error in background session auto-clear:`, err);
+        });
+        return []; // Return empty history to start a new fresh conversation session
+      }
+    }
+
     // Convert to conversation format
     // Messages from bot numbers are 'assistant', others are 'user'
     const history: ConversationMessage[] = data
